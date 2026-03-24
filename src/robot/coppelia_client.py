@@ -28,7 +28,6 @@ class CoppeliaClient:
         return self.sim.getObjectOrientation(self.robot, -1)
 
     def send_velocity(self, leftRightVel, forwBackVel, rotVel):
-        print(f"Sending: LR={leftRightVel}, FB={forwBackVel}, ROT={rotVel}")
         self.sim.setFloatSignal("leftRightVel", float(leftRightVel))
         self.sim.setFloatSignal("forwBackVel", float(forwBackVel))
         self.sim.setFloatSignal("rotVel", float(rotVel))
