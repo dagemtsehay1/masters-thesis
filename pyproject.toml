@@ -1,0 +1,12 @@
+[project]
+name = "new-master-thesis"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "coppeliasim-zmqremoteapi-client>=2.0.4",
+    "numpy>=2.4.3",
+    "sounddevice>=0.5.5",
+    "vosk>=0.3.45",
+]
