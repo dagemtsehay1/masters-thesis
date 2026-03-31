@@ -11,8 +11,10 @@ class RobotController:
 
         self.target_angle = None
 
-        self.linear_speed = 0.5
-        self.angular_speed = 1.0
+        # self.linear_speed = 0.5
+        self.linear_speed = 2.0
+        # self.angular_speed = 1.0
+        self.angular_speed = 2.0
 
     # ================= COMMAND HANDLER =================
 
