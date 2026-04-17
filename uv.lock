@@ -478,6 +478,7 @@ dependencies = [
     { name = "mediapipe" },
     { name = "numpy" },
     { name = "opencv-python" },
+    { name = "pillow" },
     { name = "sounddevice" },
     { name = "vosk" },
 ]
@@ -488,6 +489,7 @@ requires-dist = [
     { name = "mediapipe", specifier = ">=0.10.33" },
     { name = "numpy", specifier = ">=2.4.3" },
     { name = "opencv-python", specifier = ">=4.13.0.92" },
+    { name = "pillow", specifier = ">=12.1.1" },
     { name = "sounddevice", specifier = ">=0.5.5" },
     { name = "vosk", specifier = ">=0.3.45" },
 ]
