@@ -35,7 +35,7 @@ class GestureGUI:
         self.last_logged_message = None
         self.last_sent_command = None
         self.last_command_time = 0.0
-        self.command_cooldown = 0.6
+        self.command_cooldown = 0.3
 
         self.current_gesture = "-"
         self.current_voice = "-"
@@ -230,7 +230,6 @@ class GestureGUI:
             bg="white",
             fg="black",
             highlightthickness=0,
-            variable=tk.IntVar(value=70),
             command=self.on_priority_change,
         )
         self.priority_slider.pack(fill="x", padx=20, pady=(0, 8))
@@ -238,7 +237,7 @@ class GestureGUI:
 
         self.priority_note_label = tk.Label(
             self.bottom_right,
-            text="If both commands appear together, the higher priority wins.\nStop always wins.",
+            text="If both commands appear together, weighted priority is used.\nStop always wins.",
             font=("Times New Roman", 11),
             bg="white",
             fg="gray",
@@ -335,27 +334,57 @@ class GestureGUI:
         self.log_text.see("end")
         self.log_text.config(state="disabled")
 
+    def get_active_command_score(self, command_time, weight, now, active_window):
+        age = now - command_time
+        if age > active_window:
+            return None
+
+        freshness = 1.0 - (age / active_window)
+        return (weight * 0.7) + (freshness * 0.3)
+
     def resolve_final_command(self):
         now = time.time()
-        active_window = 1.0
+        active_window = 0.4
 
         with self.lock:
             voice_cmd = self.latest_voice_command
             voice_time = self.latest_voice_time
-
             gesture_cmd = self.latest_gesture_command
             gesture_time = self.latest_gesture_time
 
         active_voice = voice_cmd if (now - voice_time) <= active_window else None
-        active_gesture = gesture_cmd if (now - gesture_time) <= active_window else None
+        active_gesture = (
+            gesture_cmd if (now - gesture_time) <= active_window else None
+        )
 
         if active_voice == "stop" or active_gesture == "stop":
             return "stop"
 
         if active_voice and active_gesture:
-            if self.voice_priority.get() >= 0.5:
+            voice_weight = self.voice_priority.get()
+            gesture_weight = 1.0 - voice_weight
+
+            voice_score = self.get_active_command_score(
+                voice_time,
+                voice_weight,
+                now,
+                active_window,
+            )
+            gesture_score = self.get_active_command_score(
+                gesture_time,
+                gesture_weight,
+                now,
+                active_window,
+            )
+
+            if voice_score is None and gesture_score is None:
+                return None
+            if voice_score is None:
+                return active_gesture
+            if gesture_score is None:
                 return active_voice
-            return active_gesture
+
+            return active_voice if voice_score >= gesture_score else active_gesture
 
         if active_voice:
             return active_voice
@@ -445,7 +474,9 @@ class GestureGUI:
                 self.latest_gesture_time = now
             self.append_log("Gesture Command", command)
         else:
-            self.current_gesture = "-"
+            with self.lock:
+                if time.time() - self.latest_gesture_time > 0.4:
+                    self.current_gesture = "-"
 
         final_command = self.resolve_final_command()
         if final_command:
@@ -458,6 +489,10 @@ class GestureGUI:
         with self.lock:
             current_voice = self.current_voice
             voice_error = self.voice_error
+            latest_voice_time = self.latest_voice_time
+
+        if time.time() - latest_voice_time > 0.4:
+            current_voice = "-"
 
         if voice_error:
             self.voice_status_label.config(
