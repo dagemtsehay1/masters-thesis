@@ -3,36 +3,59 @@ import time
 from src.voice.detector import VoiceCommandDetector
 from src.robot.coppelia_client import CoppeliaClient
 from src.robot.controller import RobotController
+from src.gesture.detector import GestureDetector
+
+
+# 🎯 PRIORITY CONTROL
+VOICE_PRIORITY = 0.7
+GESTURE_PRIORITY = 1 - VOICE_PRIORITY
 
 
 def main():
     # ================= INIT =================
     voice = VoiceCommandDetector(model_path="model")
+    gesture = GestureDetector()
+
     client = CoppeliaClient()
     controller = RobotController(client)
 
+    gesture.start()
+
     print("🚀 System started")
-    print("🎤 Say: go, stop, left, right, back")
+    print("🎤 Voice + ✋ Gesture enabled")
 
     # ================= MAIN LOOP =================
     with voice.start_stream():
         while True:
             try:
-                # 🎤 get voice command
-                command = voice.listen()
+                voice_cmd = voice.listen()
+                gesture_cmd = gesture.detect()
 
-                if command:
-                    print(f"✅ Command: {command}")
-                    controller.handle_command(command)
+                final_command = None
 
-                # 🤖 update robot
+                # 🎯 PRIORITY LOGIC
+                if voice_cmd and gesture_cmd:
+                    final_command = (
+                        voice_cmd
+                        if VOICE_PRIORITY >= GESTURE_PRIORITY
+                        else gesture_cmd
+                    )
+                elif voice_cmd:
+                    final_command = voice_cmd
+                elif gesture_cmd:
+                    final_command = gesture_cmd
+
+                if final_command:
+                    print(f"✅ Command: {final_command}")
+                    controller.handle_command(final_command)
+
                 controller.step()
-
                 time.sleep(0.05)
 
             except KeyboardInterrupt:
                 print("\n🛑 Stopping system...")
                 controller._stop_robot()
+                gesture.stop()
                 break
 
             except Exception as e:
