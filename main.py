@@ -1,67 +1,45 @@
-import time
+"""Application entry point.
 
-from src.voice.detector import VoiceCommandDetector
-from src.robot.coppelia_client import CoppeliaClient
-from src.robot.controller import RobotController
-from src.gesture.detector import GestureDetector
+Responsible only for: parsing CLI arguments, loading and validating
+configuration, starting the graphical interface (default) or the headless
+loop (`--headless`), and returning an appropriate exit code. All business
+logic lives in src/app/application.py and the modules it composes.
+"""
+import logging
+import sys
+
+from src.app.application import Application
+from src.app.cli import build_parser
+from src.config.loader import ConfigError, load_config
 
 
-# 🎯 PRIORITY CONTROL
-VOICE_PRIORITY = 0.7
-GESTURE_PRIORITY = 1 - VOICE_PRIORITY
+def main(argv=None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
 
+    try:
+        config = load_config(preset=args.preset, config_path=args.config)
+    except ConfigError as exc:
+        print(f"Configuration error:\n{exc}", file=sys.stderr)
+        return 1
 
-def main():
-    # ================= INIT =================
-    voice = VoiceCommandDetector(model_path="model")
-    gesture = GestureDetector()
+    if args.log_level:
+        config.logging.level = args.log_level.upper()
 
-    client = CoppeliaClient()
-    controller = RobotController(client)
+    app = Application(config)
 
-    gesture.start()
-
-    print("🚀 System started")
-    print("🎤 Voice + ✋ Gesture enabled")
-
-    # ================= MAIN LOOP =================
-    with voice.start_stream():
-        while True:
-            try:
-                voice_cmd = voice.listen()
-                gesture_cmd = gesture.detect()
-
-                final_command = None
-
-                # 🎯 PRIORITY LOGIC
-                if voice_cmd and gesture_cmd:
-                    final_command = (
-                        voice_cmd
-                        if VOICE_PRIORITY >= GESTURE_PRIORITY
-                        else gesture_cmd
-                    )
-                elif voice_cmd:
-                    final_command = voice_cmd
-                elif gesture_cmd:
-                    final_command = gesture_cmd
-
-                if final_command:
-                    print(f"✅ Command: {final_command}")
-                    controller.handle_command(final_command)
-
-                controller.step()
-                time.sleep(0.05)
-
-            except KeyboardInterrupt:
-                print("\n🛑 Stopping system...")
-                controller._stop_robot()
-                gesture.stop()
-                break
-
-            except Exception as e:
-                print(f"❌ Error: {e}")
-                controller._stop_robot()
+    try:
+        if args.headless:
+            return app.run_headless()
+        return app.run_gui()
+    except KeyboardInterrupt:
+        app.stop()
+        return 0
+    except Exception:
+        logging.getLogger("app.main").exception("Fatal startup/runtime error")
+        app.stop()
+        return 2
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

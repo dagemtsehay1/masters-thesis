@@ -1,0 +1,104 @@
+# Base configuration. Every preset in this directory is a diff layered on
+# top of this file (config/presets/<name>.yaml overrides these values).
+# See src/config/schema.py for the full set of valid fields and their
+# meaning; unknown fields here will fail validation at startup.
+
+general:
+  app_mode: gui
+  debug: false
+
+logging:
+  level: INFO
+  log_to_file: false
+  file_path: null
+
+camera:
+  device_index: 0
+  resolution: [640, 480]
+  preview_fps: 30
+
+gesture:
+  enabled: true
+  min_hand_detection_confidence: 0.6
+  min_tracking_confidence: 0.6
+  model_asset_path: model/hand_landmarker.task
+  confirmation_frames: 5
+  cooldown_ms: 800
+  inference_fps: 15
+  show_landmarks: true
+
+microphone:
+  device_index: null
+  sample_rate: 16000
+
+voice:
+  enabled: true
+
+speech:
+  whisper:
+    model: small
+    device: cpu
+    compute_type: int8
+  vad:
+    backend: webrtcvad
+    aggressiveness: 2
+    frame_ms: 20
+    silence_timeout_s: 0.6
+    max_recording_s: 8.0
+  languages:
+    enabled: [en, am]
+    mode: auto
+    default_language: en
+  confidence_threshold: 0.55
+
+intent:
+  qwen:
+    enabled: false
+    url: http://localhost:11434
+    model: qwen3:0.6b
+    timeout_s: 3.0
+    retries: 1
+    temperature: 0.0
+    max_tokens: 64
+    languages: [en]
+
+fusion:
+  mode: voice_priority
+  event_window_ms: 1500
+  conflict_policy: highest_confidence
+  minimum_confidence:
+    voice: 0.70
+    gesture: 0.80
+  priority:
+    emergency_stop: 100
+    stop: 90
+    gesture: 60
+    voice: 50
+  require_confirmation_for: []
+  duplicate_command_cooldown_ms: 1200
+  stale_event_timeout_ms: 2000
+
+robot:
+  linear_speed: 2.0
+  angular_speed: 2.0
+  max_linear_speed: 3.0
+  max_angular_speed: 3.0
+  max_command_duration_s: null
+  rotation_tolerance_deg: 3.0
+
+safety:
+  dead_man_timeout_s: 3.0
+  allowed_actions: [move, turn, stop, emergency_stop]
+
+coppelia:
+  host: localhost
+  port: 23000
+  robot_object: /youBot
+  connect_retry_attempts: 3
+  connect_retry_delay_s: 1.0
+
+ui:
+  window_title: "Robot Controller"
+
+privacy:
+  store_transcripts: false

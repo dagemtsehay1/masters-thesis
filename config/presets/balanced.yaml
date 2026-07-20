@@ -1,0 +1,3 @@
+# Balanced preset: identical to the application defaults, kept as its own
+# named preset so `--preset balanced` is an explicit, documented choice
+# rather than relying on "no preset given" to mean the same thing.

@@ -1,0 +1,13 @@
+# Both modalities enabled. "combined" lets voice supply an unspecific "go"
+# and gesture supply the turn direction (or vice versa), on top of an exact
+# match between the two - see src/fusion/modes.py:combined for the scoped
+# semantics the current legacy command vocabulary can actually express.
+
+voice:
+  enabled: true
+
+gesture:
+  enabled: true
+
+fusion:
+  mode: combined

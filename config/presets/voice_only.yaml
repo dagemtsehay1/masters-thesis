@@ -1,0 +1,7 @@
+# Disables the gesture pipeline entirely; only voice commands are recognized.
+
+gesture:
+  enabled: false
+
+fusion:
+  mode: voice_only

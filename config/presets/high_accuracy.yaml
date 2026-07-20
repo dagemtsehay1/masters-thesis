@@ -1,0 +1,18 @@
+# Favors recognition quality over resource usage.
+
+camera:
+  resolution: [1280, 720]
+  preview_fps: 30
+
+gesture:
+  min_hand_detection_confidence: 0.75
+  min_tracking_confidence: 0.75
+  inference_fps: 30
+
+speech:
+  whisper:
+    model: small
+  confidence_threshold: 0.45
+
+logging:
+  level: DEBUG

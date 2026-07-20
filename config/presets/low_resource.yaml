@@ -1,0 +1,21 @@
+# Reduces resource usage for weaker/older laptops: smaller camera frames,
+# a lower gesture inference rate, no debug overlay, a smaller Whisper model,
+# and quieter logging. (camera.resolution/preview_fps are accepted but not
+# yet enforced anywhere - see src/config/schema.py.)
+
+camera:
+  resolution: [320, 240]
+  preview_fps: 10
+
+gesture:
+  min_hand_detection_confidence: 0.5
+  min_tracking_confidence: 0.5
+  inference_fps: 5
+  show_landmarks: false
+
+speech:
+  whisper:
+    model: base
+
+logging:
+  level: WARNING

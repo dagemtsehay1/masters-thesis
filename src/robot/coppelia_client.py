@@ -1,25 +1,46 @@
+import logging
+
 from coppeliasim_zmqremoteapi_client import RemoteAPIClient
+
+logger = logging.getLogger("robot.coppelia_client")
 
 
 class CoppeliaClient:
-    def __init__(self):
-        print("🔌 Connecting to CoppeliaSim...")
+    """Thin wrapper around the CoppeliaSim ZeroMQ remote API.
 
-        client = RemoteAPIClient()
-        self.sim = client.getObject('sim')
+    Owns exactly one connection and one robot object handle - nothing else
+    in the app should talk to CoppeliaSim directly.
+    """
 
-        # ✅ TEST CONNECTION
+    def __init__(self, host: str = "localhost", port: int = 23000, robot_object: str = "/youBot"):
+        self._host = host
+        self._port = port
+        self._robot_path = robot_object
+
+        self.sim = None
+        self.robot = None
+        self.connect()
+
+    def connect(self) -> None:
+        logger.info("Connecting to CoppeliaSim at %s:%s...", self._host, self._port)
+
+        client = RemoteAPIClient(host=self._host, port=self._port)
+        self.sim = client.getObject("sim")
+
         sim_time = self.sim.getSimulationTime()
-        print(f"✅ Connected! Simulation time: {sim_time}")
+        logger.info("Connected. Simulation time: %s", sim_time)
 
-        # robot handle
-        self.robot = self.sim.getObject('/youBot')
-        print("✅ Robot found:", self.robot)
-        client = RemoteAPIClient()
-        self.sim = client.getObject('sim')
+        self.robot = self.sim.getObject(self._robot_path)
+        logger.info("Robot object found: %s", self.robot)
 
-        # CHANGE THESE based on your robot
-        self.robot = self.sim.getObject('/youBot')
+    def is_connected(self) -> bool:
+        if self.sim is None:
+            return False
+        try:
+            self.sim.getSimulationTime()
+            return True
+        except Exception:
+            return False
 
     def get_position(self):
         return self.sim.getObjectPosition(self.robot, -1)

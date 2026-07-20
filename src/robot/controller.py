@@ -1,43 +1,76 @@
+import logging
+
 import numpy as np
+
+from src.commands.schema import RobotCommand
+from src.config.schema import RobotConfig
+from src.robot.safety import SafetyController
 from src.utils.math_utils import wrap_to_pi
+
+logger = logging.getLogger("robot.controller")
+
+_TURN_ANGLES = {
+    "left": np.pi / 2,
+    "right": -np.pi / 2,
+    "around": np.pi,
+}
 
 
 class RobotController:
-    def __init__(self, client):
+    """State machine translating validated RobotCommands into velocity
+    signals. Only ever accepts `RobotCommand` instances - callers are
+    responsible for routing everything through `commands.validator` first.
+
+    Every tick, `step()` checks the safety controller before doing anything
+    else: an active emergency stop or an expired dead-man timeout both force
+    the robot to idle, regardless of what state the movement/rotation state
+    machine below thinks it's in.
+    """
+
+    def __init__(self, client, safety: SafetyController, config: RobotConfig):
         self.client = client
+        self.safety = safety
+        self.config = config
 
         self.state = "idle"   # idle | moving | rotating
         self.mode = "stop"    # forward | backward | stop
 
         self.target_angle = None
+        self.prev_mode = "stop"
 
-        # self.linear_speed = 0.5
-        self.linear_speed = 2.0
-        # self.angular_speed = 1.0
-        self.angular_speed = 2.0
+        self.linear_speed = config.linear_speed
+        self.angular_speed = config.angular_speed
 
     # ================= COMMAND HANDLER =================
 
-    def handle_command(self, command: str):
-        print(f"🎯 Handling: {command}")
+    def handle_command(self, command: RobotCommand):
+        logger.info(
+            "Handling command: %s/%s (source=%s, confidence=%.2f)",
+            command.action,
+            command.direction,
+            command.source,
+            command.confidence,
+        )
+        self.safety.record_command()
 
-        if command == "go":
-            self.mode = "forward"
-            self.state = "moving"
-
-        elif command == "stop":
+        if command.action in ("stop", "emergency_stop"):
             self.mode = "stop"
             self.state = "idle"
             self._stop_robot()
+            if command.action == "emergency_stop":
+                self.safety.trigger_emergency_stop(reason="emergency_stop command")
+            return
 
-        elif command == "left":
-            self._start_rotation(np.pi / 2)
+        if command.action == "move":
+            self.mode = "backward" if command.direction == "backward" else "forward"
+            self.state = "moving"
+            return
 
-        elif command == "right":
-            self._start_rotation(-np.pi / 2)
-
-        elif command == "back":
-            self._start_rotation(np.pi)
+        if command.action == "turn":
+            angle = _TURN_ANGLES.get(command.direction)
+            if angle is not None:
+                self._start_rotation(angle)
+            return
 
     # ================= ROTATION =================
 
@@ -46,13 +79,26 @@ class RobotController:
         current_phi = ori[2]
 
         self.target_angle = wrap_to_pi(current_phi + angle)
-
         self.prev_mode = self.mode  # remember previous mode
         self.state = "rotating"
 
     # ================= MAIN LOOP =================
 
     def step(self):
+        if self.safety.emergency_stop_active:
+            if self.state != "idle":
+                self._stop_robot()
+                self.state = "idle"
+                self.mode = "stop"
+            return
+
+        if self.state != "idle" and self.safety.dead_man_expired():
+            logger.warning("Dead-man timeout expired with no fresh command - stopping robot")
+            self._stop_robot()
+            self.state = "idle"
+            self.mode = "stop"
+            return
+
         if self.state == "moving":
             self._move()
 
@@ -76,8 +122,8 @@ class RobotController:
 
         error = wrap_to_pi(self.target_angle - phi)
 
-        if abs(error) < np.deg2rad(3):
-            print("✅ Rotation done")
+        if abs(error) < np.deg2rad(self.config.rotation_tolerance_deg):
+            logger.info("Rotation done")
 
             if self.prev_mode == "forward":
                 self.state = "moving"
