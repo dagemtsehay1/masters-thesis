@@ -49,7 +49,7 @@ speech:
     enabled: [en, am]
     mode: auto
     default_language: en
-  confidence_threshold: 0.55
+  confidence_threshold: 0.20
 
 intent:
   qwen:
@@ -67,7 +67,11 @@ fusion:
   event_window_ms: 1500
   conflict_policy: highest_confidence
   minimum_confidence:
-    voice: 0.70
+    # `voice` is automatically capped at speech.confidence_threshold by
+    # FusionEngine (see src/fusion/engine.py) - it can never end up
+    # *stricter* than that, no matter what's set here. Raising this value
+    # above speech.confidence_threshold has no effect on voice commands.
+    voice: 0.50
     gesture: 0.80
   priority:
     emergency_stop: 100
@@ -84,7 +88,11 @@ robot:
   max_linear_speed: 3.0
   max_angular_speed: 3.0
   max_command_duration_s: null
-  rotation_tolerance_deg: 3.0
+  # Tight on purpose - LEFT/RIGHT/TURN_AROUND must land on exactly
+  # +/-90 deg / 180 deg. RobotController decelerates on approach (see
+  # _ROTATION_DECEL_ZONE_DEG in src/robot/controller.py) so a small
+  # tolerance like this converges instead of overshooting.
+  rotation_tolerance_deg: 1.0
 
 safety:
   dead_man_timeout_s: 3.0

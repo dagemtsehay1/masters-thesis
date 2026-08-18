@@ -12,7 +12,7 @@ from typing import Optional
 
 from src.commands.adapters import command_from_legacy_string
 from src.commands.schema import RobotCommand
-from src.config.schema import FusionConfig
+from src.config.schema import FusionConfig, SpeechConfig
 from src.fusion.modes import MODE_FUNCTIONS
 from src.fusion.policy import (
     NormalizedEvent,
@@ -42,8 +42,21 @@ class FusionDecision:
 
 
 class FusionEngine:
-    def __init__(self, config: FusionConfig):
+    def __init__(self, config: FusionConfig, speech_config: Optional[SpeechConfig] = None):
         self.config = config
+        # Optional - when given (Application always provides it, see
+        # start_services()), it caps the effective voice-confidence floor
+        # below so this can never end up *stricter* than
+        # `speech.confidence_threshold`. A VoiceEvent only exists because
+        # IntentEngine already accepted it against that threshold; a
+        # fusion-level gate that's independently set higher would silently
+        # drop an event the user already saw recognized. Keeping the two
+        # thresholds in sync used to be a documentation-only convention
+        # (matching preset values by hand) - one direct YAML edit to either
+        # value was enough to break it again, so this ties them together in
+        # code instead. `None` (unit tests constructing a bare FusionEngine)
+        # just skips the clamp and uses `minimum_confidence.voice` as-is.
+        self._speech_config = speech_config
         self._last_value: Optional[str] = None
         self._last_time: float = 0.0
 
@@ -58,7 +71,10 @@ class FusionEngine:
         voice = filter_stale(voice, max_age_s)
         gesture = filter_stale(gesture, max_age_s)
 
-        voice = filter_min_confidence(voice, cfg.minimum_confidence.voice)
+        voice_confidence_floor = cfg.minimum_confidence.voice
+        if self._speech_config is not None:
+            voice_confidence_floor = min(voice_confidence_floor, self._speech_config.confidence_threshold)
+        voice = filter_min_confidence(voice, voice_confidence_floor)
         gesture = filter_min_confidence(gesture, cfg.minimum_confidence.gesture)
 
         if voice is None and gesture is None:

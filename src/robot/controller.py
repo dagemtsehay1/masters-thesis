@@ -15,6 +15,19 @@ _TURN_ANGLES = {
     "around": np.pi,
 }
 
+# Rotation approach control: LEFT/RIGHT/TURN_AROUND must land on exactly
+# +90 deg, -90 deg, and 180 deg respectively (relative to the orientation the
+# turn started from - see _start_rotation). A constant-speed ("bang-bang")
+# approach can't guarantee that: it keeps commanding full angular_speed
+# right up to the tolerance check, so one simulation step can jump straight
+# past a narrow tolerance band and settle several degrees off target. Inside
+# _ROTATION_DECEL_ZONE_DEG of the target, speed is linearly scaled down
+# (floored at _MIN_ROTATION_SPEED_RAD_S so it keeps making progress) so the
+# final approach is slow enough to actually stop within tolerance instead of
+# overshooting it.
+_ROTATION_DECEL_ZONE_DEG = 15.0
+_MIN_ROTATION_SPEED_RAD_S = 0.15
+
 
 class RobotController:
     """State machine translating validated RobotCommands into velocity
@@ -100,7 +113,16 @@ class RobotController:
                 self.mode = "stop"
             return
 
-        if self.state != "idle" and self.safety.dead_man_expired():
+        # The dead-man timeout only guards rotation, not continuous
+        # translational movement: a "move forward" command is meant to run
+        # indefinitely until an explicit STOP (or emergency stop) is
+        # received, by design - see the "Disable dead-man timeout for
+        # movement" decision. Rotation stays guarded because it's not an
+        # open-ended command (it's supposed to self-terminate once the
+        # target angle is reached); if orientation feedback ever stalls,
+        # this still forces the robot back to idle instead of spinning
+        # forever.
+        if self.state == "rotating" and self.safety.dead_man_expired():
             logger.warning("Dead-man timeout expired with no fresh command - stopping robot")
             self._stop_robot()
             self.state = "idle"
@@ -150,7 +172,10 @@ class RobotController:
             return
 
         rot_dir = np.sign(error)
-        self.client.send_velocity(0, 0, rot_dir * self.angular_speed)
+        decel_zone_rad = np.deg2rad(_ROTATION_DECEL_ZONE_DEG)
+        speed_scale = min(1.0, abs(error) / decel_zone_rad)
+        speed = max(_MIN_ROTATION_SPEED_RAD_S, self.angular_speed * speed_scale)
+        self.client.send_velocity(0, 0, rot_dir * speed)
 
     # ================= STOP =================
 

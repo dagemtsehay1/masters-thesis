@@ -48,7 +48,7 @@ class Application:
 
         self.safety = SafetyController(config.safety)
         self.validator = CommandValidator(config.robot, config.safety)
-        self.fusion = FusionEngine(config.fusion)
+        self.fusion = FusionEngine(config.fusion, speech_config=config.speech)
         self.metrics = MetricsCollector(history_size=config.ui.chart_history_samples)
 
         self.client = None
@@ -130,7 +130,29 @@ class Application:
                     aggressiveness=speech_cfg.vad.aggressiveness,
                     backend=speech_cfg.vad.backend,
                 )
-                pinned_language = None if speech_cfg.languages.mode == "auto" else speech_cfg.languages.mode
+                # `languages.mode` is the single knob that decides whether
+                # Whisper and intent resolution are bilingual or locked to
+                # one language:
+                #   - "auto": Whisper detects the spoken language itself
+                #     (pinned_language=None) and both alias tables from
+                #     `languages.enabled` stay loaded, matching whichever
+                #     language Whisper reports per utterance.
+                #   - "en"/"am": Whisper is forced to decode in that
+                #     language only (it will never report the other one, so
+                #     it can't transcribe Amharic speech as English words or
+                #     vice versa), and IntentEngine is restricted to that
+                #     language's alias table too - even if `languages.enabled`
+                #     lists both, the other one is never reachable while a
+                #     specific mode is pinned.
+                if speech_cfg.languages.mode == "auto":
+                    pinned_language = None
+                    enabled_languages = speech_cfg.languages.enabled
+                    default_language = speech_cfg.languages.default_language
+                else:
+                    pinned_language = speech_cfg.languages.mode
+                    enabled_languages = [speech_cfg.languages.mode]
+                    default_language = speech_cfg.languages.mode
+
                 transcriber = WhisperTranscriber(
                     model_size=speech_cfg.whisper.model,
                     device=speech_cfg.whisper.device,
@@ -138,8 +160,8 @@ class Application:
                     pinned_language=pinned_language,
                 )
                 intent_engine = IntentEngine(
-                    language=speech_cfg.languages.default_language,
-                    enabled_languages=speech_cfg.languages.enabled,
+                    language=default_language,
+                    enabled_languages=enabled_languages,
                     confidence_threshold=speech_cfg.confidence_threshold,
                     qwen_client=self.qwen_client,
                 )

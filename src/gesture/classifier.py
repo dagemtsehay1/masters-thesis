@@ -71,10 +71,29 @@ class GestureClassifier:
         if fingers_up["index"] and not any(
             fingers_up[f] for f in ("middle", "ring", "pinky")
         ):
-            index_local = local["index_tip"]
-            if abs(index_local[0]) > abs(index_local[1]) and abs(index_local[0]) > _POINT_DX_THRESHOLD:
-                direction = "right" if index_local[0] > 0 else "left"
-                confidence = self._margin_confidence(abs(index_local[0]), _POINT_DX_THRESHOLD)
+            # Pointing left/right is measured in *raw* image-space (scaled
+            # by hand size, but not rotated into the hand-local frame like
+            # everything else above) - deliberately different from the
+            # stop/go/back checks. Projecting onto the hand-local axes
+            # (right_hat/up_hat, built from wrist->middle-MCP) cancels out
+            # exactly the motion a natural "point sideways" gesture makes:
+            # rotating the whole hand/wrist rotates up_hat right along with
+            # it, so the fingertip stays near local "up" no matter which
+            # way the hand is actually pointing. Reaching a rotation-
+            # invariant lateral offset this large would require bending the
+            # index finger sideways relative to the palm on its own - past
+            # a right angle at the knuckle - which no hand can do. Using
+            # the raw wrist->fingertip vector instead (same normalization
+            # by hand scale, same threshold/sign convention as before)
+            # measures what the gesture is actually meant to capture:
+            # whether the whole extended hand is pointing left or right in
+            # the (already mirror-flipped, see GesturePipeline.poll) image.
+            index_tip_lm = landmarks[_TIPS["index"]]
+            raw_dx = (index_tip_lm.x - landmarks[_WRIST].x) / scale
+            raw_dy = (index_tip_lm.y - landmarks[_WRIST].y) / scale
+            if abs(raw_dx) > abs(raw_dy) and abs(raw_dx) > _POINT_DX_THRESHOLD:
+                direction = "right" if raw_dx > 0 else "left"
+                confidence = self._margin_confidence(abs(raw_dx), _POINT_DX_THRESHOLD)
                 return direction, confidence
 
         if up_count >= 3:

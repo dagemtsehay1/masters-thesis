@@ -127,7 +127,18 @@ ConflictPolicy = Literal["highest_confidence", "voice_wins", "gesture_wins"]
 
 
 class MinimumConfidenceConfig(_StrictModel):
-    voice: float = Field(default=0.70, ge=0.0, le=1.0)
+    # `voice`'s effective value is capped at `speech.confidence_threshold`
+    # by FusionEngine (src/fusion/engine.py, given that SpeechConfig at
+    # construction) - a VoiceEvent only exists because IntentEngine already
+    # accepted it against that threshold, so a fusion-level gate that's
+    # independently set *stricter* would silently re-reject events the user
+    # already saw recognized in the UI (transcribed, resolved, displayed)
+    # but that then never reach the robot. The two used to only agree by
+    # convention (matching numbers by hand across config files/UI edits),
+    # which broke as soon as either one was edited alone - this field is
+    # therefore an upper bound in practice, not always the literal value
+    # used.
+    voice: float = Field(default=0.50, ge=0.0, le=1.0)
     gesture: float = Field(default=0.80, ge=0.0, le=1.0)
 
 
@@ -161,7 +172,7 @@ class RobotConfig(_StrictModel):
     max_linear_speed: float = Field(default=3.0, gt=0.0)
     max_angular_speed: float = Field(default=3.0, gt=0.0)
     max_command_duration_s: Optional[float] = Field(default=None, gt=0.0)
-    rotation_tolerance_deg: float = Field(default=3.0, gt=0.0)
+    rotation_tolerance_deg: float = Field(default=1.0, gt=0.0)
 
 
 class SafetyConfig(_StrictModel):

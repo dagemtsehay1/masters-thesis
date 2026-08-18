@@ -12,6 +12,9 @@ gesture:
 speech:
   whisper:
     model: small
+  # FusionEngine automatically caps fusion.minimum_confidence.voice at this
+  # value (see src/config/schema.py's MinimumConfidenceConfig comment), so
+  # lowering it here alone is enough - no matching fusion override needed.
   confidence_threshold: 0.45
 
 logging:
