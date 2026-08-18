@@ -74,3 +74,9 @@ class IntentEngine:
             return None
 
         return VoiceEvent(command=legacy_word, confidence=combined_confidence, language=resolved_language)
+
+    def set_confidence_threshold(self, threshold: float) -> None:
+        """Lets the Configuration panel adjust the voice acceptance
+        threshold (`speech.confidence_threshold`) live, without reloading
+        Whisper or rebuilding the pipeline."""
+        self._threshold = max(0.0, min(1.0, float(threshold)))

@@ -26,3 +26,12 @@ def setup_logging(level: str = "INFO", log_to_file: bool = False, file_path: Opt
         handlers=handlers,
     )
     _configured = True
+
+
+def set_level(level: str) -> None:
+    """Changes the root logger's level at runtime (e.g. from the
+    Configuration panel) without touching handlers/formatting."""
+    resolved = getattr(logging, level.upper(), None)
+    if resolved is None:
+        raise ValueError(f"Unknown log level: {level!r}")
+    logging.getLogger().setLevel(resolved)

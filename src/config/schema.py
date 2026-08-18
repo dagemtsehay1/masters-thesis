@@ -14,11 +14,16 @@ shape again once something does enforce them.
 """
 from typing import List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # `validate_assignment=True` means `config.section.field = value` (the
+    # Configuration panel's runtime-edit path, e.g.
+    # `config.robot.linear_speed = 2.5`) re-runs the same field validators
+    # used at load time - so a value entered through the UI is validated
+    # before it's applied, exactly like a value coming from a preset file.
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
 
 class GeneralConfig(_StrictModel):
@@ -41,12 +46,12 @@ class CameraConfig(_StrictModel):
 
 class GestureConfig(_StrictModel):
     enabled: bool = True
-    min_hand_detection_confidence: float = 0.6
-    min_tracking_confidence: float = 0.6
+    min_hand_detection_confidence: float = Field(default=0.6, ge=0.0, le=1.0)
+    min_tracking_confidence: float = Field(default=0.6, ge=0.0, le=1.0)
     model_asset_path: str = "model/hand_landmarker.task"
-    confirmation_frames: int = 5  # consecutive matching frames required before a gesture is confirmed
-    cooldown_ms: int = 800  # minimum time between two confirmations of the same gesture
-    inference_fps: Optional[int] = 15  # None = run inference as fast as frames arrive
+    confirmation_frames: int = Field(default=5, ge=1)  # consecutive matching frames required before a gesture is confirmed
+    cooldown_ms: int = Field(default=800, ge=0)  # minimum time between two confirmations of the same gesture
+    inference_fps: Optional[int] = Field(default=15, ge=1)  # None = run inference as fast as frames arrive
     show_landmarks: bool = True  # debug overlay on the preview frame; can be disabled to save CPU
 
 
@@ -83,7 +88,7 @@ class SpeechConfig(_StrictModel):
     whisper: WhisperConfig = WhisperConfig()
     vad: VADConfig = VADConfig()
     languages: LanguagesConfig = LanguagesConfig()
-    confidence_threshold: float = 0.55
+    confidence_threshold: float = Field(default=0.55, ge=0.0, le=1.0)
 
 
 class QwenConfig(_StrictModel):
@@ -122,8 +127,8 @@ ConflictPolicy = Literal["highest_confidence", "voice_wins", "gesture_wins"]
 
 
 class MinimumConfidenceConfig(_StrictModel):
-    voice: float = 0.70
-    gesture: float = 0.80
+    voice: float = Field(default=0.70, ge=0.0, le=1.0)
+    gesture: float = Field(default=0.80, ge=0.0, le=1.0)
 
 
 class FusionPriorityConfig(_StrictModel):
@@ -141,35 +146,35 @@ class FusionPriorityConfig(_StrictModel):
 
 class FusionConfig(_StrictModel):
     mode: FusionMode = "voice_priority"
-    event_window_ms: int = 1500
+    event_window_ms: int = Field(default=1500, ge=0)
     conflict_policy: ConflictPolicy = "highest_confidence"
     minimum_confidence: MinimumConfidenceConfig = MinimumConfidenceConfig()
     priority: FusionPriorityConfig = FusionPriorityConfig()
     require_confirmation_for: List[str] = []
-    duplicate_command_cooldown_ms: int = 1200
-    stale_event_timeout_ms: int = 2000
+    duplicate_command_cooldown_ms: int = Field(default=1200, ge=0)
+    stale_event_timeout_ms: int = Field(default=2000, ge=0)
 
 
 class RobotConfig(_StrictModel):
-    linear_speed: float = 2.0
-    angular_speed: float = 2.0
-    max_linear_speed: float = 3.0
-    max_angular_speed: float = 3.0
-    max_command_duration_s: Optional[float] = None
-    rotation_tolerance_deg: float = 3.0
+    linear_speed: float = Field(default=2.0, gt=0.0)
+    angular_speed: float = Field(default=2.0, gt=0.0)
+    max_linear_speed: float = Field(default=3.0, gt=0.0)
+    max_angular_speed: float = Field(default=3.0, gt=0.0)
+    max_command_duration_s: Optional[float] = Field(default=None, gt=0.0)
+    rotation_tolerance_deg: float = Field(default=3.0, gt=0.0)
 
 
 class SafetyConfig(_StrictModel):
-    dead_man_timeout_s: float = 3.0
+    dead_man_timeout_s: float = Field(default=3.0, gt=0.0)
     allowed_actions: List[str] = ["move", "turn", "stop", "emergency_stop"]
 
 
 class CoppeliaConfig(_StrictModel):
     host: str = "localhost"
-    port: int = 23000
+    port: int = Field(default=23000, ge=1, le=65535)
     robot_object: str = "/youBot"
-    connect_retry_attempts: int = 3
-    connect_retry_delay_s: float = 1.0
+    connect_retry_attempts: int = Field(default=3, ge=1)
+    connect_retry_delay_s: float = Field(default=1.0, ge=0.0)
 
 
 class UIConfig(_StrictModel):

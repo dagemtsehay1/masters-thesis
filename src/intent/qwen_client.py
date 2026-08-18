@@ -38,16 +38,29 @@ _SYSTEM_PROMPT = (
 class QwenClient:
     def __init__(self, config: QwenConfig):
         self.config = config
-        self.enabled = config.enabled
+        # Cached result of the last health_check() call, so the UI (e.g. the
+        # "ollama" status badge) can display current reachability without
+        # re-issuing an HTTP request from the UI thread on every repaint.
+        self.last_health_ok: Optional[bool] = None
+
+    @property
+    def enabled(self) -> bool:
+        # Reads through to the live config object (rather than a value
+        # snapshotted at construction) so toggling "Qwen3 fallback" in the
+        # Configuration panel takes effect on the very next transcript,
+        # without reloading Ollama or rebuilding the voice pipeline.
+        return self.config.enabled
 
     def health_check(self) -> bool:
         """Best-effort check that Ollama is reachable. Never raises."""
         try:
             request = urllib.request.Request(f"{self.config.url}/api/tags", method="GET")
             with urllib.request.urlopen(request, timeout=self.config.timeout_s) as response:
-                return response.status == 200
+                self.last_health_ok = response.status == 200
+                return self.last_health_ok
         except Exception as exc:
             logger.info("Ollama health check failed: %s", exc)
+            self.last_health_ok = False
             return False
 
     def resolve(self, normalized_text: str, language: str = "en") -> Tuple[Optional[str], float]:

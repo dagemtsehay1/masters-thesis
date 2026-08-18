@@ -122,7 +122,7 @@ class MainWindow(QMainWindow):
         self.voice_panel = VoicePanel()
         self.robot_panel = RobotPanel(self.workers)
         self.command_fusion_panel = CommandFusionPanel(self.app)
-        self.config_panel = ConfigPanel(self.app)
+        self.config_panel = ConfigPanel(self.app, self.workers)
         self.log_panel = LogPanel(max_visible=self.app.config.ui.maximum_visible_logs)
         self.performance_panel = PerformancePanel(self.app)
         self.diagnostics_panel = DiagnosticsPanel(self.app)
@@ -164,6 +164,7 @@ class MainWindow(QMainWindow):
         w.log_message.connect(self.log_panel.append_log)
         w.log_message.connect(self.dashboard.note_log_message)
         w.startup_finished.connect(self._on_startup_finished)
+        w.status_recheck_finished.connect(self._refresh_health_badges)
 
     # ================= ACTIONS =================
 
@@ -176,21 +177,54 @@ class MainWindow(QMainWindow):
         self.workers.start()
 
     def _on_startup_finished(self, success: bool, error: str) -> None:
-        if success:
-            self.start_button.setText("Running")
-            for name in ("coppelia", "robot"):
-                self.badges[name].set_state("ready", "Connected")
-            if self.app.voice is not None:
-                self.badges["microphone"].set_state("ready", "Listening")
-            if self.app.gesture is not None:
-                self.badges["camera"].set_state("ready", "Streaming")
-                self.badges["mediapipe"].set_state("ready", "Loaded")
-        else:
+        if not success:
+            # Only a genuinely unexpected failure reaches here now - a
+            # CoppeliaSim connection failure is isolated inside
+            # start_services() and no longer blocks voice/gesture (see
+            # Application.start_services()).
             self.start_button.setText("Start System")
             self.start_button.setEnabled(True)
             for name in ("coppelia", "robot"):
                 self.badges[name].set_state("error", error)
             QMessageBox.critical(self, "Startup failed", f"Could not start services:\n{error}")
+            return
+
+        self.start_button.setText("Running")
+        self._refresh_health_badges()
+
+    def _refresh_health_badges(self) -> None:
+        """Drives every header badge (including "whisper" and "ollama",
+        which the old ad-hoc per-widget checks below never touched and so
+        stayed on their initial "disabled" text forever) from the same
+        `health.run_all()` checks the Diagnostics panel uses - one source of
+        truth for "is this component actually working" instead of two
+        drifting implementations."""
+        from src.monitoring import health
+
+        results = {r.name: r for r in health.run_status_checks(self.app)}
+        _STATE_FOR_STATUS = {"pass": "ready", "warn": "disabled", "fail": "error"}
+
+        for badge_name, check_name in (
+            ("camera", "camera"),
+            ("mediapipe", "camera"),  # MediaPipe loads as part of the gesture pipeline - no separate check
+            ("microphone", "microphone"),
+            ("whisper", "whisper"),
+            ("ollama", "ollama"),
+            ("coppelia", "coppelia"),
+            ("robot", "coppelia"),
+        ):
+            result = results.get(check_name)
+            if result is None:
+                continue
+            self.badges[badge_name].set_state(_STATE_FOR_STATUS.get(result.status, "disabled"), result.message)
+
+        if results["coppelia"].status != "pass":
+            self.log_panel.append_log(
+                "WARNING", "coppelia",
+                "CoppeliaSim is not connected - robot motion is a no-op. "
+                "Voice/gesture recognition are unaffected; start CoppeliaSim and use "
+                "\"Reconnect\" in Configuration to retry.",
+            )
 
     def _on_emergency_state_changed(self, active: bool) -> None:
         self.emergency_button.setStyleSheet(

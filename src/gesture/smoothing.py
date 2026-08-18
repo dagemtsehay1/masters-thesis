@@ -78,3 +78,15 @@ class GestureSmoother:
     @property
     def confirmation_required(self) -> int:
         return self._confirmation_frames
+
+    # ================= RUNTIME CONFIGURATION =================
+    # Lets the Configuration panel adjust gesture-confirmation settings
+    # (main.txt's "gesture-confirmation settings") without restarting the
+    # gesture pipeline. Mid-confirmation state is intentionally left alone -
+    # only the thresholds used by the *next* evaluation change.
+
+    def set_confirmation_frames(self, frames: int) -> None:
+        self._confirmation_frames = max(1, int(frames))
+
+    def set_cooldown_s(self, cooldown_s: float) -> None:
+        self._cooldown_s = max(0.0, float(cooldown_s))

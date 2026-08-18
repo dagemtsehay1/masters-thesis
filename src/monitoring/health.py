@@ -54,6 +54,24 @@ def check_ollama(application) -> HealthResult:
     return HealthResult("ollama", "fail", "Ollama not reachable")
 
 
+def check_ollama_cached(application) -> HealthResult:
+    """Same verdict as `check_ollama`, but reads QwenClient's cached result
+    from its last check (set during `start_services()`, or by a previous
+    live check) instead of issuing a fresh HTTP request. Used wherever a
+    badge needs to reflect Ollama's status without doing network I/O on the
+    calling thread - notably the UI thread refreshing header badges."""
+    if not application.config.intent.qwen.enabled:
+        return HealthResult("ollama", "warn", "Qwen fallback disabled")
+    if application.qwen_client is None:
+        return HealthResult("ollama", "fail", "Qwen client not created")
+    cached = application.qwen_client.last_health_ok
+    if cached is None:
+        return HealthResult("ollama", "warn", "Not checked yet")
+    if cached:
+        return HealthResult("ollama", "pass", "Ollama reachable")
+    return HealthResult("ollama", "fail", "Ollama not reachable")
+
+
 def check_coppelia(application) -> HealthResult:
     if application.client is None:
         return HealthResult("coppelia", "fail", "Not connected")
@@ -82,6 +100,22 @@ ALL_CHECKS = [
     check_robot_stop,
 ]
 
+# Passive checks only: no network round-trip to Ollama (uses the cached
+# result instead - see check_ollama_cached) and no robot_stop probe (that
+# one is an explicit, user-triggered action per this module's docstring,
+# not something that should fire every time badges refresh).
+STATUS_CHECKS = [
+    check_camera,
+    check_microphone,
+    check_whisper,
+    check_ollama_cached,
+    check_coppelia,
+]
+
 
 def run_all(application) -> list:
     return [check(application) for check in ALL_CHECKS]
+
+
+def run_status_checks(application) -> list:
+    return [check(application) for check in STATUS_CHECKS]

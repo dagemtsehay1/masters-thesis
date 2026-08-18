@@ -38,8 +38,17 @@ class RobotController:
         self.target_angle = None
         self.prev_mode = "stop"
 
-        self.linear_speed = config.linear_speed
-        self.angular_speed = config.angular_speed
+    # `self.config` is the live RobotConfig object shared with the rest of
+    # the app (e.g. the Configuration panel) - reading speed through it
+    # rather than a snapshot taken at construction time means a runtime
+    # speed change takes effect on the very next tick.
+    @property
+    def linear_speed(self) -> float:
+        return self.config.linear_speed
+
+    @property
+    def angular_speed(self) -> float:
+        return self.config.angular_speed
 
     # ================= COMMAND HANDLER =================
 
@@ -75,8 +84,7 @@ class RobotController:
     # ================= ROTATION =================
 
     def _start_rotation(self, angle):
-        ori = self.client.get_orientation()
-        current_phi = ori[2]
+        current_phi = self._current_yaw()
 
         self.target_angle = wrap_to_pi(current_phi + angle)
         self.prev_mode = self.mode  # remember previous mode
@@ -108,6 +116,8 @@ class RobotController:
     # ================= MOVE =================
 
     def _move(self):
+        if self.client is None:
+            return
         if self.mode == "forward":
             self.client.send_velocity(0, self.linear_speed, 0)
 
@@ -117,8 +127,7 @@ class RobotController:
     # ================= ROTATE =================
 
     def _rotate(self):
-        ori = self.client.get_orientation()
-        phi = ori[2]
+        phi = self._current_yaw()
 
         error = wrap_to_pi(self.target_angle - phi)
 
@@ -146,4 +155,16 @@ class RobotController:
     # ================= STOP =================
 
     def _stop_robot(self):
-        self.client.send_velocity(0, 0, 0)
+        if self.client is not None:
+            self.client.send_velocity(0, 0, 0)
+
+    # ================= CLIENT GUARDS =================
+    # `self.client` can be None if CoppeliaClient construction itself raised
+    # unexpectedly (its normal "CoppeliaSim unreachable" case never returns
+    # None - see CoppeliaClient.connect()). These guards keep step()/_move()/
+    # _rotate() safe in that edge case instead of crashing the robot worker.
+
+    def _current_yaw(self) -> float:
+        if self.client is None:
+            return 0.0
+        return self.client.get_orientation()[2]

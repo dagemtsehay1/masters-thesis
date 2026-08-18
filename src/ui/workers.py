@@ -157,6 +157,7 @@ class RobotWorker(QObject):
     robot_state_changed = Signal(str, str)  # controller.state, controller.mode
     emergency_state_changed = Signal(bool)
     log_message = Signal(str, str, str)
+    status_recheck_finished = Signal()  # tells the UI thread to re-read badge state
 
     def __init__(self, application, shared_events: _SharedEvents, tick_interval_ms: int = 50):
         super().__init__()
@@ -229,6 +230,33 @@ class RobotWorker(QObject):
     def request_resume(self) -> None:
         self._app.safety.clear_emergency_stop()
 
+    @Slot()
+    def request_qwen_recheck(self) -> None:
+        """Runs on the robot thread because health_check() is a blocking
+        HTTP call - triggered when the Configuration panel turns the Qwen3
+        fallback on live, so the "ollama" header badge doesn't keep showing
+        a stale "disabled"/"not checked yet" state after the toggle."""
+        if self._app.qwen_client is not None and self._app.config.intent.qwen.enabled:
+            if self._app.qwen_client.health_check():
+                self.log_message.emit("INFO", "qwen", "Ollama/Qwen fallback is reachable.")
+            else:
+                self.log_message.emit("WARNING", "qwen", "Ollama/Qwen fallback enabled but not reachable.")
+        self.status_recheck_finished.emit()
+
+    @Slot(str, int)
+    def request_coppelia_reconnect(self, host: str, port: int) -> None:
+        """Runs on the robot thread (not the UI thread) because it's
+        blocking network I/O with retries - see CoppeliaClient.connect()."""
+        if self._app.client is None:
+            self.log_message.emit("WARNING", "coppelia", "No CoppeliaSim client to reconnect - restart services first.")
+            return
+        self._app.client.set_endpoint(host, port)
+        if self._app.client.reconnect():
+            self.log_message.emit("INFO", "coppelia", f"Reconnected to CoppeliaSim at {host}:{port}.")
+        else:
+            self.log_message.emit("WARNING", "coppelia", f"Still could not connect to CoppeliaSim at {host}:{port}.")
+        self.status_recheck_finished.emit()
+
 
 class ServiceWorkers(QObject):
     """Owns the three threads above and re-exposes their signals under one
@@ -243,6 +271,7 @@ class ServiceWorkers(QObject):
     robot_state_changed = Signal(str, str)
     emergency_state_changed = Signal(bool)
     log_message = Signal(str, str, str)
+    status_recheck_finished = Signal()
 
     # Outgoing requests to RobotWorker - real signals (not direct method
     # calls) so Qt delivers them via a queued connection onto the robot
@@ -250,6 +279,8 @@ class ServiceWorkers(QObject):
     manual_command_requested = Signal(str)
     emergency_stop_requested = Signal()
     resume_requested = Signal()
+    coppelia_reconnect_requested = Signal(str, int)
+    qwen_recheck_requested = Signal()
 
     def __init__(self, application):
         super().__init__()
@@ -279,10 +310,13 @@ class ServiceWorkers(QObject):
         self.robot_worker.emergency_state_changed.connect(self.emergency_state_changed)
         self.robot_worker.log_message.connect(self.log_message)
         self.robot_worker.services_ready.connect(self._on_services_ready)
+        self.robot_worker.status_recheck_finished.connect(self.status_recheck_finished)
 
         self.manual_command_requested.connect(self.robot_worker.request_manual_command)
         self.emergency_stop_requested.connect(self.robot_worker.request_emergency_stop)
         self.resume_requested.connect(self.robot_worker.request_resume)
+        self.coppelia_reconnect_requested.connect(self.robot_worker.request_coppelia_reconnect)
+        self.qwen_recheck_requested.connect(self.robot_worker.request_qwen_recheck)
 
         self._robot_thread.started.connect(self.robot_worker.start)
         self._voice_thread.started.connect(self.voice_worker.run_loop)
@@ -308,6 +342,12 @@ class ServiceWorkers(QObject):
 
     def clear_emergency_stop(self) -> None:
         self.resume_requested.emit()
+
+    def request_coppelia_reconnect(self, host: str, port: int) -> None:
+        self.coppelia_reconnect_requested.emit(host, port)
+
+    def request_qwen_recheck(self) -> None:
+        self.qwen_recheck_requested.emit()
 
     def stop(self) -> None:
         # VoiceWorker/GestureWorker just run plain while-loops (no QTimer),

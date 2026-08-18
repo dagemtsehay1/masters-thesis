@@ -1,0 +1,2093 @@
+\chapter{Methodology}
+\label{chap:methodology}
+
+This chapter describes the methodology used to design and implement the offline multimodal robot-control system. The system allows a user to control a simulated youBot in CoppeliaSim through spoken commands and hand gestures. .
+
+The aim of the implementation is not to develop a new speech-recognition model or a new hand-landmark model. Instead, the work integrates existing machine-learning-based perception tools into one complete control pipeline. Whisper is used for local speech transcription, MediaPipe Hands is used for hand-landmark detection, and a rule-based classifier converts the detected landmarks into supported gestures. The results from both modalities are represented in a common form and processed by a configurable fusion component before a command is transmitted to the simulated robot.
+
+The methodology was shaped by the main requirements stated in Chapter~1. The system must operate locally, support voice and gesture as separate input channels, provide English and Amharic voice interaction, remain suitable for a standard laptop, and apply clear safety rules before executing a robot command. Modularity was therefore treated as an important design principle. Audio acquisition, speech recognition, gesture recognition, command interpretation, multimodal fusion, robot control, simulation communication, configuration, and visualization are implemented as separate but connected components.
+
+The complete interaction sequence is organized as follows:
+
+\begin{enumerate}
+    \item Capture audio from the microphone and frames from the camera;
+    \item Detect spoken input and collect a complete audio segment;
+    \item Transcribe the captured speech using the local Whisper model;
+    \item Detect the user's hand and estimate its landmark positions;
+    \item Classify the supported hand gesture using geometric rules;
+    \item Convert voice and gesture outputs into the same canonical command vocabulary;
+    \item Create standardized command events containing source and timing information;
+    \item Reject invalid, outdated, repeated, or insufficiently reliable events;
+    \item Resolve simultaneous or conflicting inputs using the configured fusion mode;
+    \item Apply the safety priority assigned to the \texttt{STOP} command;
+    \item Translate the selected command into a robot-control instruction;
+    \item Transmit the instruction to the youBot model in CoppeliaSim; and
+    \item Display recognition, fusion, communication, and robot status through the graphical interface.
+\end{enumerate}
+
+This processing structure provides a clear path from human input to simulated robot motion. It also makes it possible to inspect the output of each module separately, which is useful when testing recognition performance, conflict resolution, communication, or robot behaviour.
+
+\section{Methodological Approach}
+\label{sec:methodological_approach}
+
+The work follows a system-design and implementation approach. The first stage was the definition of a small command vocabulary that could be represented by both speech and hand gestures. The second stage was the implementation of independent voice and gesture pipelines. The third stage was the creation of a shared event representation and the development of the multimodal fusion rules. The final stage connected the selected commands to the youBot simulation and exposed the system state through a desktop graphical interface.
+
+The system is evaluated as an integrated engineering prototype. For this reason, the methodology considers not only whether an individual command is recognized, but also whether the result is interpreted correctly, selected by the fusion layer, delivered to CoppeliaSim, and executed by the simulated robot. This end-to-end view identifies recognition reliability, timing differences between modalities, real-time responsiveness, and safe command execution as the main challenges.
+
+The implemented command vocabulary is deliberately limited to the movements required by the prototype:
+
+\begin{equation}
+\mathcal{C} =
+\left\{
+\texttt{FORWARD},
+\texttt{LEFT},
+\texttt{RIGHT},
+\texttt{TURN\_AROUND},
+\texttt{STOP}
+\right\}.
+\label{eq:command_vocabulary}
+\end{equation}
+
+A restricted vocabulary provides two practical advantages. First, it makes the behaviour of the robot predictable because only predefined actions can reach the controller. Second, it allows unsupported or uncertain input to be rejected instead of being interpreted as an arbitrary movement. This is particularly important for a system that combines natural-language input with visual recognition.
+
+The software is designed for local execution. Microphone audio, camera frames, speech transcription, gesture processing, command interpretation, fusion, and simulator communication are handled on the host computer. The optional Qwen3 component is also executed locally through Ollama. As a result, normal interaction does not depend on a cloud speech service or a remote language-model service.
+
+The methodology is limited to a simulated robot. Although software safety rules are implemented, the system does not include the hardware emergency stopping, obstacle sensing, collision supervision, or certified risk controls that would be required for operation on a physical robot. The use of simulation allows the complete multimodal pipeline to be developed and observed without introducing those physical risks.
+
+
+\section{System Architecture}
+\label{sec:system_architecture}
+
+The proposed application uses a layered architecture in which each layer has a clearly defined responsibility. The five main layers are input acquisition, perception, command interpretation, multimodal fusion, and robot control with simulation.
+
+The input acquisition layer obtains raw data from the microphone and camera. The two input streams are handled separately because audio and video have different sampling rates, processing steps, and response times. A spoken command may require a complete utterance before it can be transcribed, while gesture processing evaluates a continuous sequence of camera frames.
+
+The perception layer transforms the raw sensor data into meaningful intermediate results. In the voice branch, the system detects speech, buffers the utterance, and produces a transcript. In the gesture branch, the system detects the hand and obtains the landmark positions required by the gesture classifier.
+
+The command-interpretation layer maps each perception result to the command vocabulary in Equation~\ref{eq:command_vocabulary}. Different spoken phrases that express the same intention are converted to the same internal command. The gesture classifier produces the same command identifiers, allowing both channels to be processed consistently after interpretation.
+
+The multimodal fusion layer receives standardized command events from the two channels. It validates the events, checks their age, suppresses repeated input, applies the selected arbitration rule, and enforces the safety priority of \texttt{STOP}. This layer produces one final command for the robot controller.
+
+The robot-control and simulation layer converts the selected command into a motion request and sends it to the youBot model in CoppeliaSim. The communication and control logic is kept separate from the recognition modules so that perception can be tested without requiring robot motion.
+
+The complete architecture is shown in Figure~\ref{fig:system_architecture}.
+
+\begin{figure}[H]
+    \centering
+    \IfFileExists{01.png}
+        {\includegraphics[width=0.95\textwidth]{01.png}}
+        {\fbox{\parbox[c][0.25\textheight][c]{0.90\textwidth}{\centering
+        Insert \texttt{01.png}: high-level system architecture.}}}
+    \caption{High-level architecture of the offline multimodal robot-control system.}
+    \label{fig:system_architecture}
+\end{figure}
+
+The voice and gesture channels remain independent until they reach the fusion layer. This arrangement prevents one recognition process from becoming a mandatory dependency of the other. The separate voice and gesture pipelines are shown in Figures~\ref{fig:voice_pipeline} and~\ref{fig:gesture_pipeline}.
+
+\begin{figure}[H]
+    \centering
+    \IfFileExists{02.png}
+        {\includegraphics[width=0.90\textwidth]{02.png}}
+        {\fbox{\parbox[c][0.22\textheight][c]{0.86\textwidth}{\centering
+        Insert \texttt{02.png}: voice-processing pipeline.}}}
+    \caption{Voice-processing pipeline from microphone input to a canonical command event.}
+    \label{fig:voice_pipeline}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \IfFileExists{03.png}
+        {\includegraphics[width=0.90\textwidth]{03.png}}
+        {\fbox{\parbox[c][0.22\textheight][c]{0.86\textwidth}{\centering
+        Insert \texttt{03.png}: gesture-processing pipeline.}}}
+    \caption{Gesture-processing pipeline from camera input to a canonical command event.}
+    \label{fig:gesture_pipeline}
+\end{figure}
+
+The modular architecture supports independent testing and controlled replacement of components. For example, the command interpretation logic can be updated without changing the robot-control module, provided that it continues to produce the same canonical event format. The same principle applies to the speech recognizer, gesture classifier, and fusion strategy.
+
+\section{Software Tools and Execution Environment}
+\label{sec:software_tools}
+
+The application is implemented in Python. Python provides the main environment for connecting the perception modules, fusion logic, simulator communication, configuration, logging, and graphical interface. The complete program is started through one entry point:
+
+\begin{verbatim}
+python3 main.py
+\end{verbatim}
+
+Using one entry point simplifies the application lifecycle. It provides a common location for loading the configuration, initializing devices and models, starting the processing components, establishing the simulator connection, opening the graphical interface, and releasing resources during shutdown.
+
+The main software tools used by the prototype are summarized in Table~\ref{tab:software_tools}.
+
+\begin{table}[H]
+    \centering
+    \small
+    \begin{tabular}{|p{0.26\textwidth}|p{0.64\textwidth}|}
+        \hline
+        \textbf{Tool} & \textbf{Function in the application} \\
+        \hline
+        Python 3.12 & Integration of the complete application, processing logic, configuration, communication, and graphical interface. \\
+        \hline
+        CoppeliaSim Edu v4.9.0 & Simulation of the youBot and execution of robot motion commands. \\
+        \hline
+        Whisper small (faster-whisper) & Offline multilingual transcription of captured speech. \\
+        \hline
+        MediaPipe v0.10.33 & Detection of the hand and estimation of 21 hand landmarks. \\
+        \hline
+        OpenCV v4.13.0.92 & Camera access, frame processing, image conversion, annotation, and preview display. \\
+        \hline
+        Ollama with Qwen3:0.6b & Optional local interpretation of transcripts that are not resolved by direct command matching. \\
+        \hline
+        NumPy 2.4.3 & Representation and processing of numerical audio, landmark, image, and control data. \\
+        \hline
+        Graphical interface (PySide6 v6.11.1) & Monitoring of inputs, recognition results, fusion decisions, simulator status, configuration, and logs. \\
+        \hline
+    \end{tabular}
+    \caption{Main software tools used in the implemented system.}
+    \label{tab:software_tools}
+\end{table}
+
+Whisper is used as the automatic speech-recognition component. The implementation uses a multilingual model because the project includes English and Amharic input. Whisper produces text and does not directly control the robot. The transcript is always processed by the command-interpretation stage before a robot command can be generated. 
+
+MediaPipe Hands is used to estimate the hand landmarks required by the gesture classifier. The system does not train a separate gesture network. Instead, the detected landmark geometry is evaluated using explicit gesture rules. This keeps the visual pipeline lightweight and operating on a laptop.
+
+OpenCV provides access to the camera and prepares the frames for hand-landmark detection. It is also used to create the annotated camera preview shown in the interface. The preview can include the detected landmark skeleton and the current gesture result.
+
+Ollama is used to run the small Qwen3:0.6b model locally. The model is an optional fallback and is not invoked for every utterance. Clear transcripts are resolved through direct matching first. Qwen3 is used only when the transcript is not matched by the deterministic command rules and the fallback is enabled.
+
+CoppeliaSim provides the simulation environment. The youBot model and the working scene are shown in Figures~\ref{fig:youbot_model} and~\ref{fig:coppeliasim_environment}.
+
+\begin{figure}[H]
+    \centering
+    \IfFileExists{04.png}
+        {\includegraphics[width=0.48\textwidth]{04.png}}
+        {\fbox{\parbox[c][0.25\textheight][c]{0.46\textwidth}{\centering
+        Insert \texttt{04.png}: simulated youBot model.}}}
+    \caption{youBot model used in the CoppeliaSim simulation.}
+    \label{fig:youbot_model}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \IfFileExists{05.png}
+        {\includegraphics[width=0.95\textwidth]{05.png}}
+        {\fbox{\parbox[c][0.28\textheight][c]{0.90\textwidth}{\centering
+        Insert \texttt{05.png}: CoppeliaSim working environment.}}}
+    \caption{CoppeliaSim environment used to test the multimodal control system.}
+    \label{fig:coppeliasim_environment}
+\end{figure}
+
+
+\section{Unified Command Representation}
+\label{sec:command_representation}
+
+The voice and gesture modules produce different intermediate outputs. The voice module produces a transcript and a resolved intention, while the gesture module produces a hand-landmark configuration and a classified gesture. A common event structure is therefore required before the results can be compared or combined.
+
+A command event is represented conceptually as
+
+\begin{equation}
+E=(c,s,q,t),
+\label{eq:command_event}
+\end{equation}
+
+where \(c\) is the canonical command, \(s\) is the source modality, \(q\) is the reliability information associated with the result, and \(t\) is the event timestamp.
+
+The source field is defined as
+
+\begin{equation}
+s \in
+\left\{
+\texttt{VOICE},
+\texttt{GESTURE}
+\right\}.
+\end{equation}
+
+The command field belongs to the vocabulary defined in Equation~\ref{eq:command_vocabulary}. This prevents the fusion and robot-control components from receiving unrestricted text or arbitrary gesture labels.
+
+The timestamp records when the interpreted event becomes available to the fusion module. It is used to determine whether the event is still recent enough to represent the user's current intention. The source field allows the system to apply modality-specific thresholds and priority rules.
+
+The reliability field is interpreted within the module that generated it. Voice and gesture processing do not necessarily produce directly comparable scores. For that reason, source-specific filtering is applied before fusion. A cross-modality confidence comparison is used only when the configured implementation provides values on a comparable scale.
+
+Using one event structure reduces the connection between modules. The fusion layer does not need to know how Whisper produced the transcript or which hand-landmark rule produced the gesture. It only processes the standardized command, source, reliability information, and timestamp.
+
+\section{Voice Command Recognition}
+\label{sec:voice_recognition}
+
+The voice-processing module converts a spoken utterance into a canonical command event. The complete pipeline contains audio acquisition, speech detection, buffering, transcription, transcript normalization, intent resolution, result validation, and event generation.
+
+The voice branch is designed to remain separate from robot execution. A transcript cannot reach the robot controller directly. It must first be mapped to the supported command vocabulary and validated by the command-processing logic.
+
+\subsection{Audio Acquisition}
+\label{subsec:audio_acquisition}
+
+Audio is captured continuously from the microphone selected in the application configuration. The incoming signal is temporarily stored as a sequence of samples. A finite segment can be represented as
+
+\begin{equation}
+x[n], \qquad n=0,1,\ldots,N-1,
+\end{equation}
+
+where \(x[n]\) is the captured audio signal and \(N\) is the number of samples in the completed segment.
+
+The continuous stream is not sent directly to Whisper. The system first determines whether speech is present and collects the samples associated with one utterance. This prevents silence from being processed as a long recording and reduces unnecessary speech-recognition calls.
+
+Audio acquisition runs independently from camera processing and robot communication. While one utterance is being prepared or transcribed, the gesture module and graphical interface can continue updating.
+
+Before transcription, the audio is converted to the format expected by the speech-recognition implementation. The exact sample rate, frame size, and audio-device settings are read from the application configuration rather than being fixed in the recognition logic.
+
+\subsection{Voice Activity Detection and Buffering}
+\label{subsec:vad}
+
+Voice activity detection is used to identify the beginning and end of spoken input. A simplified VAD decision is expressed as
+
+\begin{equation}
+V(x)=
+\begin{cases}
+1, & \text{if speech is detected},\\
+0, & \text{otherwise}.
+\end{cases}
+\label{eq:vad_decision}
+\end{equation}
+
+When speech is detected, audio samples are added to the active buffer. The segment is completed after the utterance ends and the configured silence condition is satisfied. The completed segment is then placed into the speech-recognition pipeline.
+
+This stage separates microphone activity from actual command processing. Background silence does not create command events, and an incomplete recording is not interpreted as a valid command.
+
+The VAD configuration is adjustable because microphone sensitivity and background conditions can differ between computers and locations. 
+% The exact values used during evaluation should be taken from the final configuration rather than inferred from the model itself.
+
+\subsection{Speech Recognition with Whisper}
+\label{subsec:whisper}
+
+After an utterance has been completed, the buffered audio is passed to the local multilingual Whisper model. The transcription operation is represented as
+
+\begin{equation}
+T=\operatorname{ASR}(x),
+\end{equation}
+
+where \(x\) is the captured speech segment and \(T\) is the generated transcript.
+
+The model is loaded locally and reused during application operation. Reusing the loaded model avoids repeated initialization for every command.
+
+Whisper produces natural-language text, which may contain punctuation, capitalization, or small recognition variations. The transcript is therefore treated as an intermediate result. It is displayed in the interface for monitoring, but it does not become a robot command until the interpretation stage accepts it.
+
+The multilingual model is used for both English and Amharic input. The two languages share the same downstream command vocabulary, but their transcripts are normalized and matched using language-appropriate expressions. Recognition quality is not assumed to be identical between the two languages. It must be measured separately in the evaluation chapter.
+
+\subsection{Transcript Normalization}
+\label{subsec:transcript_normalization}
+
+Transcript normalization prepares the recognized text for command matching. The implemented normalization stage removes differences that are not relevant to the intended robot action.
+
+The main normalization operations include:
+
+\begin{itemize}
+    \item conversion to a consistent letter case where applicable;
+    \item removal of unnecessary punctuation;
+    \item removal of leading and trailing whitespace;
+    \item reduction of repeated spaces; and
+    \item standardization of known command expressions.
+\end{itemize}
+
+For example, the transcript
+
+\begin{verbatim}
+"Move Forward!"
+\end{verbatim}
+
+is normalized to
+
+\begin{verbatim}
+move forward
+\end{verbatim}
+
+This procedure improves deterministic matching because equivalent transcripts are presented to the intent resolver in a consistent form.
+
+\subsection{Deterministic Intent Resolution}
+\label{subsec:deterministic_intent}
+
+The first interpretation step uses predefined command expressions and aliases. Direct matching is preferred because it is fast, transparent, and produces a repeatable result for supported phrases.
+
+Representative English mappings are shown in Table~\ref{tab:voice_mapping}. The table illustrates the command structure used by the system and does not replace the exact phrase list defined in the application configuration.
+
+\begin{table}[H]
+    \centering
+    
+    \begin{tabular}{|l|l|}
+        \hline
+        \textbf{Example expression} & \textbf{Canonical command} \\
+        \hline
+        forward & \texttt{FORWARD} \\
+        \hline
+        move forward & \texttt{FORWARD} \\
+        \hline
+        go ahead & \texttt{FORWARD} \\
+        \hline
+        turn left & \texttt{LEFT} \\
+        \hline
+        turn right & \texttt{RIGHT} \\
+        \hline
+        turn around & \texttt{TURN\_AROUND} \\
+        \hline
+        stop & \texttt{STOP} \\
+        \hline
+        halt & \texttt{STOP} \\
+        \hline
+    \end{tabular}
+    \caption{Representative spoken expressions and canonical commands.}
+    \label{tab:voice_mapping}
+\end{table}
+
+The same command-mapping approach is used for Amharic input. Spoken expressions are transcribed by the multilingual speech-recognition model and then mapped to the same canonical command vocabulary used for English. Representative Amharic expressions are shown in Table~\ref{tab}.
+
+\begin{table}[H]
+\centering
+
+\begin{tabular}{|l|l|}
+    \hline
+    \textbf{Example Amharic expression} & \textbf{Canonical command} \\
+    \hline
+    ወደፊት & \texttt{FORWARD} \\
+    \hline
+    ወደፊት ሂድ & \texttt{FORWARD} \\
+    \hline
+    ወደ ግራ ዞር & \texttt{LEFT} \\
+    \hline
+    ወደ ቀኝ ዞር & \texttt{RIGHT} \\
+    \hline
+    ወደ ኋላ ዞር & \texttt{TURN\_AROUND} \\
+    \hline
+    ቁም & \texttt{STOP} \\
+    \hline
+    አቁም & \texttt{STOP} \\
+    \hline
+\end{tabular}
+
+\caption{Representative Amharic expressions and their corresponding canonical commands.}
+\label{tab:amharic_voice_mapping}
+
+\end{table}
+
+Although the spoken expressions differ between English and Amharic, both languages are converted into the same internal command representation. Consequently, the fusion and robot-control modules do not need to distinguish between the languages after intent resolution. For example, both move forward'' and ወደፊት ሂድ'' are mapped to \texttt{FORWARD} before the resulting event is passed to the fusion layer.
+
+When a direct match is found, the resolver produces the corresponding canonical command. When no reliable match is found, the result remains unresolved and may be processed by the optional local language-model fallback.
+
+\subsection{Optional Qwen3 Fallback}
+\label{subsec:qwen_fallback}
+
+The local Qwen3:0.6b model provides an optional fallback for transcripts that cannot be resolved by the preceding intent-matching stages. It is not invoked for every recognized utterance. The system first attempts rule-based matching using known command expressions and aliases, followed by fuzzy matching. Qwen3 is considered only when these simpler methods do not produce an acceptable command and the fallback option is enabled.
+
+The language model is used as a constrained intent classifier rather than as a general robot-control agent. The recognized transcript is provided together with instructions that restrict the model to the command structure supported by the application. The model is expected to return a structured result containing fields such as the intended action, direction, confidence, and supporting interpretation information.
+
+Conceptually, the returned intent can be represented as
+
+\begin{equation}
+I_{\mathrm{Qwen}} =
+\left(
+a,d,q,r
+\right),
+\label{eq:qwen_intent}
+\end{equation}
+
+where \(a\) denotes the interpreted action, \(d\) represents the associated direction when required, \(q\) is the confidence value returned by the model, and \(r\) contains the interpretation reason or supporting information.
+
+The returned data is validated before it can be converted into a robot command. Responses that contain invalid JSON, do not satisfy the expected schema, contain unsupported action--direction combinations, or otherwise fall outside the allowed command structure are rejected. A communication failure, timeout, or unavailable Ollama service is handled in the same way and results in no resolved command.
+
+The complete intent-resolution sequence can therefore be represented as
+
+\begin{equation}
+I(T)=
+\begin{cases}
+I_{\mathrm{rule}}(T),
+& \text{if exact or alias matching succeeds},\\[0.4em]
+
+I_{\mathrm{fuzzy}}(T),
+& \text{if fuzzy matching produces an acceptable result},\\[0.4em]
+
+I_{\mathrm{Qwen}}(T),
+& \text{if the previous stages fail and the fallback is enabled},\\[0.4em]
+
+\varnothing,
+& \text{otherwise}.
+\end{cases}
+\label{eq:voice_intent_resolution}
+\end{equation}
+
+Here, \(\varnothing\) represents an unresolved input. The implementation does not convert an unresolved transcript into an explicit movement command. Instead, no voice command event is generated for that utterance.
+
+The Qwen3 output is also separated from robot execution. Even when the model returns a valid interpretation, the result must still pass through the application's command conversion, confidence checking, fusion, and command-validation stages before it can reach the robot controller. Qwen3 therefore cannot introduce arbitrary robot actions or communicate directly with CoppeliaSim.
+
+This staged approach keeps language-model inference outside the normal processing path for simple and clearly recognized commands. It preserves deterministic behaviour for known expressions while providing an additional local interpretation mechanism for transcripts that cannot be resolved by the rule-based and fuzzy-matching stages.
+
+\subsection{Voice Event Generation}
+\label{subsec:voice_event}
+
+A voice event is generated only after the transcript has been mapped to a valid command. The source field is set to \texttt{VOICE}, and the event receives a timestamp before it is passed to the fusion module.
+
+If the voice module provides a reliability value, it is checked against the configured voice threshold:
+
+\begin{equation}
+q_v \geq \tau_v,
+\end{equation}
+
+where \(q_v\) is the voice reliability value and \(\tau_v\) is the configured minimum requirement. A result that does not satisfy the implemented validation rule does not produce a movement event.
+
+The graphical interface records the listening state, detected speech state, transcript, resolved command, and available reliability information. These values make it possible to identify whether a failure occurred during recording, transcription, normalization, or intent resolution.
+
+\begin{figure}[H]
+    \centering
+    \IfFileExists{06.png}
+        {\includegraphics[width=0.92\textwidth]{06.png}}
+        {\fbox{\parbox[c][0.27\textheight][c]{0.88\textwidth}{\centering
+        \textbf{Screenshot placeholder for \texttt{06.png}}\\[0.6em]
+        Add a screenshot showing microphone activity, the recognized transcript,
+        the selected language, and the resolved voice command.}}}
+    \caption{Voice-processing information displayed by the application.}
+    \label{fig:voice_interface}
+\end{figure}
+
+\section{Gesture Recognition}
+\label{sec:gesture_recognition}
+
+The gesture-recognition module provides the visual input channel of the application. It receives images from an RGB camera, detects a hand using MediaPipe, evaluates the detected landmarks using a geometric classifier, and produces a gesture result that can later be processed by the command and fusion components.
+
+The gesture pipeline is deliberately divided into separate stages. Camera acquisition and hand-landmark estimation are handled by the MediaPipe wrapper, while gesture classification is performed by a separate rule-based component. The classifier therefore operates on hand landmarks rather than directly on image pixels. This separation also allows the landmark detector to be loaded once and reused while individual frames are processed continuously.
+
+\subsection{Camera Acquisition and Hand Detection}
+\label{subsec:camera_acquisition_and_hand_detection}
+
+Camera frames are obtained using OpenCV and converted to the RGB representation required by MediaPipe. A frame processed at time (t) can be represented as
+
+\begin{equation}
+F_t.
+\end{equation}
+
+The RGB frame is passed to a wrapper around MediaPipe's \texttt{HandLandmarker}. The wrapper creates one landmark-detection model during initialization and reuses the same instance for subsequent frames.
+
+The detector operates in MediaPipe's video mode. This mode requires timestamps that increase between successive calls. The implementation generates the timestamp in milliseconds and checks it against the previous value. If the new timestamp is not greater than the previous one, it is increased by one millisecond before the frame is processed.
+
+The default parameters defined by the wrapper are summarized in Table~\ref{tab:hand-landmark-parameter}. These are constructor defaults and can be replaced if different values are supplied by the application configuration.
+
+\begin{table}[H]
+\centering
+
+\begin{tabular}{|l|l|}
+    \hline
+    \textbf{Parameter} & \textbf{Default value} \\
+    \hline
+    Running mode & \texttt{VIDEO} \\
+    \hline
+    Maximum number of hands & (1) \\
+    \hline
+    Minimum hand-detection confidence & (0.6) \\
+    \hline
+    Minimum tracking confidence & (0.6) \\
+    \hline
+\end{tabular}
+\caption{Default parameters defined by the hand-landmark wrapper.}
+\label{tab:hand-landmark-parameter}
+
+\end{table}
+
+In addition to the landmark coordinates, MediaPipe provides handedness information. The implementation stores the detected hand as \texttt{Left} or \texttt{Right} when this information is available. Handedness is included in the resulting gesture event, but it is not currently used by the geometric classification rules.
+
+The application can also draw the detected landmarks on the camera image for monitoring purposes. This visualization is separate from classification and does not influence the recognized gesture.
+
+\subsection{Hand Landmark Representation}
+\label{subsec}
+
+For each detected hand, MediaPipe returns 21 landmarks:
+
+\begin{equation}
+H_t =
+\left{
+L_0,L_1,\ldots,L_{20}
+\right}.
+\end{equation}
+
+Each landmark contains normalized spatial coordinates:
+
+\begin{equation}
+L_i=(x_i,y_i,z_i),
+\qquad
+i\in{0,\ldots,20}.
+\end{equation}
+
+Although MediaPipe provides three coordinates, the current gesture classifier uses the two-dimensional (x) and (y) coordinates when constructing its geometric representation. The depth coordinate (z) is not used by the implemented classification rules.
+
+The classifier uses the wrist, the middle-finger metacarpophalangeal joint, and the PIP and tip landmarks of the index, middle, ring, and little fingers. The relevant indices are shown in Table~\ref{tab:pip-landmark}.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{|p{0.29\textwidth}|p{0.25\textwidth}|p{0.25\textwidth}|}
+\hline
+\textbf{Hand part} & \textbf{PIP landmark} & \textbf{Tip landmark} \\
+\hline
+Index finger & (L_6) & (L_8) \\
+\hline
+Middle finger & (L_{10}) & (L_{12}) \\
+\hline
+Ring finger & (L_{14}) & (L_{16}) \\
+\hline
+Little finger & (L_{18}) & (L_{20}) \\
+\hline
+\end{tabular}
+\caption{Finger landmarks used by the implemented gesture classifier.}
+\label{tab:pip-landmark}
+\end{table}
+
+
+The wrist \(L_0\) and middle-finger MCP landmark \(L_9\) are additionally used to construct a local coordinate frame for the hand.
+
+The thumb landmarks are not used by the current classifier. The gesture definitions presented in this section therefore describe only the landmark comparisons that are actually present in the implementation.
+
+\subsection{Local Hand Coordinate System}
+\label{subsec:local_hand_coordinate_system}
+
+A direct comparison of raw image coordinates would make the rules sensitive to the size and orientation of the hand in the camera image. To reduce this effect, the classifier constructs a local two-dimensional coordinate system for every detected hand.
+
+Let the wrist position be
+
+\begin{equation}
+\mathbf{p}_{w} =
+\begin{bmatrix}
+x_0\\
+y_0
+\end{bmatrix},
+\end{equation}
+
+and the middle-finger MCP position be
+
+\begin{equation}
+\mathbf{p}_{m} =
+\begin{bmatrix}
+x_9\\
+y_9
+\end{bmatrix}.
+\end{equation}
+
+The vector from the wrist to the middle-finger MCP is
+
+\begin{equation}
+\mathbf{a} = \mathbf{p}_{m} - \mathbf{p}_{w}.
+\end{equation}
+
+Its magnitude is used as a reference scale:
+
+\begin{equation}
+s=
+\left|
+\mathbf{a}
+\right|.
+\end{equation}
+
+The normalized main hand axis is then
+
+\begin{equation}
+\hat{\mathbf{u}} = \frac{\mathbf{a}}{s},
+\end{equation}
+
+and a perpendicular axis is calculated as
+
+\begin{equation}
+\hat{\mathbf{r}} =
+\begin{bmatrix}
+-\hat{u}_y\
+\hat{u}_x
+\end{bmatrix}
+\end{equation}
+
+
+For a landmark \(L_i\), the vector from the wrist to that landmark is projected onto the two local axes and divided by the hand scale:
+
+\begin{equation}
+\mathbf{l}_i =
+\frac{1}{s}
+\begin{bmatrix}
+(\mathbf{p}_i-\mathbf{p}_w)^{T}\hat{\mathbf{r}}\
+(\mathbf{p}_i-\mathbf{p}_w)^{T}\hat{\mathbf{u}}
+\end{bmatrix}.
+\label{eq}
+\end{equation}
+
+The resulting coordinate \(\mathbf{l}_i\) describes the landmark relative to the size and orientation of the detected hand. This makes the geometric conditions less dependent on how large the hand appears in the image and reduces sensitivity to rotation within the image plane.
+
+The implementation does not explicitly compensate for strong rotation of the hand out of the image plane. Such poses can therefore change the observed landmark geometry and remain a limitation of the current rule-based approach.
+
+\subsection{Finger Extension Detection}
+\label{subsec}
+
+The first classification step determines which of the four evaluated fingers are extended. For each finger (f), the classifier compares the local vertical coordinate of its fingertip with the corresponding PIP landmark.
+
+The extension margin is
+
+\begin{equation}
+m_f = l_{\mathrm{tip},f}^{(y)} - l_{\mathrm{PIP},f}^{(y)}.
+\end{equation}
+
+A finger is classified as extended when
+
+\begin{equation}
+m_f > 0.15.
+\label{eq:mf}
+\end{equation}
+
+The threshold (0.15) is applied in the normalized local hand coordinate system. After evaluating the four fingers, the classifier counts how many satisfy Equation~\ref{eq:mf}. This count, together with the positions of selected fingertips, is used to distinguish the implemented gestures.
+
+\subsection{Implemented Gesture Rules}
+\label{subsec}
+
+The classifier is deterministic. It evaluates the current landmark configuration against a sequence of geometric conditions and returns the first recognized gesture together with a heuristic confidence value.
+
+The gesture rules present in the current implementation are summarized in Table~\ref{tab:gesture_rule}.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{|p{0.14\textwidth}|p{0.55\textwidth}|p{0.17\textwidth}|}
+\hline
+\textbf{Meaning} & \textbf{Implemented condition} & \textbf{Output} \\
+\hline
+Stop &
+All four evaluated fingers satisfy the extension condition. &
+\texttt{stop} \\
+\hline
+Left &
+Only the index finger is extended. Its lateral position dominates its vertical position in the local frame and its lateral coordinate is below (-1.0). &
+\texttt{left} \\
+\hline
+Right &
+Only the index finger is extended. Its lateral position dominates its vertical position in the local frame and its lateral coordinate is above (+1.0). &
+\texttt{right} \\
+\hline
+Forward &
+At least three evaluated fingers are extended and their mean image-space fingertip position is more than (0.12) above the wrist. &
+\texttt{go} \\
+\hline
+Backward &
+At least three evaluated fingers are extended and their mean image-space fingertip position is more than (0.12) below the wrist. &
+\texttt{back} \\
+\hline
+No match &
+None of the implemented geometric conditions is satisfied. &
+No gesture \\
+\hline
+\end{tabular}
+\caption{Geometric rules implemented by the current gesture classifier.}
+\label{tab:gesture_rule}
+\end{table}
+
+The stop gesture is detected when all four evaluated fingers are extended:
+
+\begin{equation}
+N_{\mathrm{up}}=4.
+\end{equation}
+
+For directional pointing, only the index finger may be extended. Let the local position of the index fingertip be
+
+\begin{equation}
+\begin{bmatrix}
+l_x\
+l_y
+\end{bmatrix}
+\end{equation}
+
+The pose is treated as horizontal pointing only when
+
+\begin{equation}
+|l_x|>|l_y|
+\end{equation}
+
+and
+
+\begin{equation}
+|l_x|>1.0.
+\end{equation}
+
+The sign of the lateral coordinate then determines the direction:
+
+\begin{equation}
+g=
+\begin{cases}
+\texttt{right}, & l_x>1.0,\\
+\texttt{left}, & l_x<-1.0.
+\end{cases}
+\label{eq}
+\end{equation}
+
+Forward and backward detection use the image-space vertical positions of the extended fingertips. When at least three fingers are extended, their mean vertical coordinate is calculated as
+
+\begin{equation}
+\frac{1}{N} \sum_{f \in \mathcal{F}{\mathrm{up}}} y_{\mathrm{tip}, f}
+\end{equation}
+
+where \(\mathcal{F}_{\mathrm{up}}\) is the set of fingers currently classified as extended.
+
+Since the image \(y\)-coordinate increases towards the bottom of the frame, the forward gesture is detected when
+
+\begin{equation}
+\bar{y}_{\mathrm{tip}}
+<
+y_{\mathrm{wrist}}-0.12,
+\label{eq}
+\end{equation}
+
+while the backward gesture is detected when
+
+\begin{equation}
+\bar{y}_{\mathrm{tip}} > y_{\mathrm{wrist}} + 0.12
+\label{eq}
+\end{equation}
+
+If none of these conditions is satisfied, the classifier returns no gesture and assigns a confidence value of \(0.0\).
+
+\subsection{Gesture Confidence}
+\label{subsec}
+
+The confidence value produced by the classifier is not the output probability of a trained neural-network classifier. It is a heuristic score derived from the geometric margin associated with the rule that produced the result.
+
+The common confidence function is
+
+\begin{equation}
+q_g =
+\min
+\left(
+1.0,,
+0.6+
+0.4\frac{m}{\tau}
+\right),
+\label{eq}
+\end{equation}
+
+where \(m\) is the margin passed by the recognized gesture rule and \(\tau\) is the corresponding threshold.
+
+Different gestures provide different geometric margins to this function. For the stop gesture, the minimum finger-extension margin is used with the finger-extension threshold. For left and right, the absolute lateral displacement of the index fingertip is used with the pointing threshold. For forward and backward, the vertical amount by which the fingertips exceed the required raised or lowered boundary is used.
+
+Table~\ref{tab:gesture_confidence} summarizes the values used by the implementation.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{|p{0.22\textwidth}|p{0.45\textwidth}|p{0.17\textwidth}|}
+\hline
+\textbf{Gesture} & \textbf{Margin supplied to confidence function} & \textbf{Threshold} \\
+\hline
+\texttt{stop} &
+Minimum extension margin among the four evaluated fingers &
+(0.15) \\
+\hline
+\texttt{left}, \texttt{right} &
+Absolute local lateral coordinate of the index fingertip &
+(1.0) \\
+\hline
+\texttt{go} &
+Distance above the required raised-fingertip boundary &
+(0.12) \\
+\hline
+\texttt{back} &
+Distance below the required lowered-fingertip boundary &
+(0.12) \\
+\hline
+\end{tabular}
+\caption{Geometric values used to calculate the gesture confidence score.}
+\label{tab:gesture_confidence}
+\end{table}
+
+The score should therefore be interpreted as an internal indication of how strongly the current hand configuration satisfies the implemented geometric rule. It is not a calibrated probability of gesture correctness and should not be interpreted in the same way as the output of a separately trained gesture-recognition model.
+
+\subsection{Gesture Output and Event Representation}
+\label{subsec}
+
+The classifier directly produces the following gesture vocabulary:
+
+\begin{equation}
+G=
+\left{
+\texttt{go},
+\texttt{back},
+\texttt{stop},
+\texttt{left},
+\texttt{right}
+\right}.
+\label{eq}
+\end{equation}
+
+A successful classification is stored in a gesture event. The event contains the recognized gesture, its confidence value, the detected handedness when available, the current processing state, and a timestamp.
+
+The event schema supports four processing states:
+
+\begin{equation}
+G_s\in
+\left{
+\texttt{idle},
+\texttt{candidate},
+\texttt{confirmed},
+\texttt{cooldown}
+\right}.
+\label{eq}
+\end{equation}
+
+These states allow the surrounding gesture-processing pipeline to distinguish an unrecognized frame, a candidate observation, an accepted gesture, and a cooldown period.
+
+The classification function itself operates on one landmark set at a time. The code presented for the classifier does not implement the temporal transition from \texttt{candidate} to \texttt{confirmed}; that logic belongs to the component that manages successive gesture observations. The temporal-confirmation method should therefore be described using the actual implementation of that component rather than introducing an assumed voting or sliding-window algorithm.
+
+% The current classifier also does not generate a \(\texttt{TURN\_AROUND}\) gesture.
+
+When no hand is detected, the landmark wrapper returns an empty landmark collection and no gesture can be classified. Similarly, when a hand is detected but none of the geometric rules is satisfied, the classifier returns no gesture rather than selecting the closest available action. This prevents an unsupported hand pose from being converted into a robot movement.
+
+\section{Multimodal Data Fusion}
+\label{sec:multimodal_fusion}
+
+The multimodal fusion module combines the outputs of the voice and gesture channels and produces a single validated command for the robot-control module. A single fusion engine is used by the application so that the same filtering and arbitration rules are applied regardless of which interface component initiates the decision process.
+
+Fusion is necessary because voice and gesture events are generated independently. The two modalities may provide the same instruction, produce conflicting instructions, arrive at different times, or temporarily provide no valid input. The fusion module therefore performs a sequence of normalization, filtering, safety checking, arbitration, optional cross-modal confirmation, command conversion, and duplicate suppression before a command is released for execution.
+
+The complete decision sequence implemented by the fusion engine can be summarized as
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{111.png}
+    \caption{The sequence of the multimodal fusion decision process.}
+    \label{fig:fusion_flowchart}
+\end{figure}
+
+If no valid event remains at any stage where a decision is required, the fusion engine returns no command rather than generating a substitute action.
+
+\subsection{Event Normalization}
+\label{subsec}
+
+Voice and gesture modules use different event structures. Before arbitration, their outputs are therefore converted into a common internal representation:
+
+\begin{equation}
+E_n =
+(v,q,a,s),
+\label{eq}
+\end{equation}
+
+where \(v\) is the command value, \(q\) is the associated confidence value, \(a\) is the age of the event in seconds, and \(s\) identifies the source modality.
+
+The normalized source is
+
+\begin{equation}
+s \in
+\left{
+\texttt{voice},
+\texttt{gesture}
+\right}.
+\end{equation}
+
+A voice event is considered for normalization only when the event exists and contains a recognized command. A gesture event has an additional requirement: its processing state must be \texttt{confirmed}. Candidate, idle, and cooldown gesture events are therefore not passed to normal fusion arbitration.
+
+The age of an event is calculated from its timestamp as
+
+\begin{equation}
+a =
+\max
+\left(
+0,,
+t_{\mathrm{current}}-t_{\mathrm{event}}
+\right).
+\label{eq}
+\end{equation}
+
+The lower bound of zero prevents a negative age from being introduced by small timestamp differences.
+
+\subsection{Stale-Event Filtering}
+\label{subsec}
+
+After normalization, the voice and gesture events are checked independently for age. The configured stale-event timeout is stored in milliseconds and converted to seconds before comparison.
+
+Let
+\begin{equation}
+T_{\max} = \frac{T_{\mathrm{stale,ms}}}{1000}
+\end{equation}
+
+A normalized event remains eligible only when
+
+\begin{equation}
+a \leq T_{\max}.
+\label{eq}
+\end{equation}
+
+Events older than the configured interval are removed from the current fusion cycle.
+
+This check prevents an older voice or gesture event from being selected after it is no longer considered representative of the user's current instruction.
+
+\subsection{Confidence Filtering}
+\label{subsec}
+
+The remaining events are checked against modality-specific minimum confidence values. Separate thresholds are maintained for voice and gesture:
+
+\begin{equation}
+q_v \geq \tau_v,
+\qquad
+q_g \geq \tau_g,
+\label{eq}
+\end{equation}
+
+where \(q_v\) and \(q_g\) are the confidence values of the normalized voice and gesture events, while \(\tau_v\) and \(\tau_g\) are their configured minimum values.
+
+An event that does not satisfy the threshold for its own modality is removed before arbitration. If both events are removed by stale-event or confidence filtering, the fusion engine returns no decision for that processing cycle.
+
+The source-specific thresholds are important because confidence is produced differently by the voice and gesture processing pipelines. The filtering stage therefore evaluates each value against the threshold defined for its own source.
+
+\subsection{Stop Override}
+\label{subsec}
+
+After stale and confidence filtering, the engine checks for the internal command value \texttt{stop}. This check is performed before the configured fusion mode and therefore gives a valid stop event priority over ordinary movement and turning commands.
+
+The rule can be expressed as
+
+\begin{equation}
+v_v=\texttt{stop}
+;\lor;
+v_g=\texttt{stop}
+\quad\Longrightarrow\quad
+v^{*}=\texttt{stop}.
+\label{eq}
+\end{equation}
+
+If only the voice event contains \texttt{stop}, the resulting source is recorded as \texttt{voice}. If only the gesture contains \texttt{stop}, the source is recorded as \texttt{gesture}.
+
+When both modalities provide a valid stop event, the source of the result is recorded as \texttt{combined}, and the larger of the two confidence values is retained:
+
+\begin{equation}
+q^{*} = \max(q_v, q_g).
+\end{equation}
+
+The corresponding decision reason identifies whether the stop was produced by one modality or by both modalities.
+
+The stop override bypasses the normal fusion mode, but the resulting stop value still passes through the common finalization stage. Consequently, the same duplicate-cooldown mechanism used for other commands is also applied to repeated stop events.
+
+\subsection{Fusion Modes}
+\label{subsec}
+
+If no stop override is produced, the engine selects one of the configured fusion modes. The implementation provides nine modes, summarized in Table~\ref{tab:fusion_modes}.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{|p{0.23\textwidth}|p{0.64\textwidth}|}
+\hline
+\textbf{Fusion mode} & \textbf{Implemented behaviour} \\
+\hline
+\texttt{voice\_only} &
+Uses only an eligible voice event. A gesture event does not produce the normal result in this mode. \\
+\hline
+
+\texttt{gesture\_only} &
+Uses only an eligible gesture event. A voice event does not produce the normal result in this mode. \\
+\hline
+
+\texttt{either} &
+Uses the available event when only one modality is present. When both are present, the event with the higher confidence is selected. \\
+\hline
+
+\texttt{voice\_priority} &
+Selects voice when a valid voice event is available; otherwise uses the gesture event. \\
+\hline
+
+\texttt{gesture\_priority} &
+Selects gesture when a valid gesture event is available; otherwise uses the voice event. \\
+\hline
+
+\texttt{latest\_wins} &
+Selects the event with the smaller age, corresponding to the more recent input. \\
+\hline
+
+\texttt{highest\_confidence} &
+Selects the event with the larger confidence value. \\
+\hline
+
+\texttt{confirmation} &
+Produces a result only when both modalities are present and contain the same command value. \\
+\hline
+
+\texttt{combined} &
+Combines the currently supported complementary command values according to the implemented composition rules. \\
+\hline
+\end{tabular}
+\caption{Fusion modes implemented by the multimodal fusion engine.}
+\label{tab:fusion_modes}
+\end{table}
+
+If the configuration contains an unknown fusion-mode name, the engine logs a warning and falls back to
+
+\begin{verbatim}
+voice_priority
+\end{verbatim}
+
+rather than terminating the fusion process.
+
+\subsection{Priority-Based Fusion}
+\label{subsec}
+
+In voice-priority mode, the voice event is selected whenever it remains available after filtering:
+
+\begin{equation}
+F_{\mathrm{voice}}(E_v,E_g)=
+\begin{cases}
+v_v, & \text{if }E_v\text{ is available},\\
+v_g, & \text{otherwise, if }E_g\text{ is available}.
+\end{cases}
+\end{equation}
+
+Gesture-priority mode performs the opposite selection:
+
+\begin{equation}
+F_{\mathrm{gesture}}(E_v,E_g)=
+\begin{cases}
+v_g, & \text{if }E_g\text{ is available},\\
+v_v, & \text{otherwise, if }E_v\text{ is available}.
+\end{cases}
+\end{equation}
+
+The \(\texttt{voice\_only}\) and \(\texttt{gesture\_only}\) modes provide stricter versions of modality selection. Unlike the priority modes, they do not fall back to the other modality when their selected source is unavailable.
+
+\subsection{Latest-Command Fusion}
+\label{subsec}
+
+The \(\texttt{latest\_wins}\) mode selects the event with the smaller normalized age:
+
+\begin{equation}
+v^{*}=
+\begin{cases}
+v_v, & a_v \leq a_g,\\
+v_g, & a_g < a_v.
+\end{cases}
+\label{eq}
+\end{equation}
+
+Using age rather than the original timestamp gives the same ordering while working directly with the normalized event structure.
+
+The use of the \(\leq\) comparison provides a deterministic tie rule. When the two normalized events have the same age, the voice event is selected.
+
+If only one modality is available, that event is selected directly.
+
+\subsection{Highest-Confidence and Either Modes}
+\label{subsec}
+
+The \(\texttt{highest\_confidence}\) mode selects the event with the larger confidence value:
+
+\begin{equation}
+v^{*}=
+\begin{cases}
+v_v, & q_v \geq q_g,\\
+v_g, & q_g > q_v.
+\end{cases}
+\label{eq}
+\end{equation}
+
+The implementation therefore uses the voice event as the deterministic result when the two confidence values are equal.
+
+The \texttt{either} mode behaves in the same way when both modalities are present. When only one valid modality remains, that event is used directly.
+
+Because these modes compare confidence values produced by different pipelines, their interpretation depends on how the configured voice and gesture confidence scores are defined. Both events have already passed their respective minimum thresholds before this comparison is performed.
+
+\subsection{Confirmation Mode}
+\label{subsec}
+
+The \(\texttt{confirmation}\) mode requires both modalities to be available and to contain the same command value. A single modality is not sufficient to produce a result:
+
+\begin{equation}
+F_{\mathrm{confirmation}}(E_v,E_g)=
+\begin{cases}
+v_v, & v_v=v_g,\\
+\varnothing, & \text{otherwise}.
+\end{cases}
+\label{eq}
+\end{equation}
+
+When agreement is found, the result source is marked as \texttt{combined} and its confidence is the larger of the two input values:
+
+\begin{equation}
+q^{*}=\max(q_v,q_g).
+\end{equation}
+
+If either modality is absent or if the values disagree, no fusion decision is produced.
+
+\subsection{Combined Mode}
+\label{subsec}
+
+The \texttt{combined} mode provides limited command composition using the command vocabulary currently available to the application.
+
+When the two modalities contain the same value, that value is selected and the source is marked as \texttt{combined}:
+
+\begin{equation}
+v_v=v_g
+\quad\Longrightarrow\quad
+v^{*}=v_v.
+\end{equation}
+
+In this case, the output confidence is
+
+\begin{equation}
+q^{*}=\max(q_v,q_g).
+\end{equation}
+
+The current implementation also recognizes one complementary pattern. The internal movement value \texttt{go} can be paired with either \texttt{left} or \texttt{right} from the other modality.
+
+For example: \texttt{left}, and similarly, \texttt{right}.
+
+For this complementary combination, the resulting confidence is the smaller input value: 
+\begin{equation}
+\min(q_v,q_g).
+\end{equation}
+
+The current composition rule is intentionally limited to the command values supported by the existing interface. It does not provide unrestricted composition of independent action and direction fields.
+
+\subsection{Command Conversion}
+\label{subsec}
+
+The individual fusion modes operate on normalized command values. After a mode selects a value, the result is passed through the application's command adapter to create a validated \texttt{RobotCommand}.
+
+Conceptually,
+
+\begin{equation}
+(v,s,q)
+\longrightarrow
+\texttt{RobotCommand}.
+\label{eq}
+\end{equation}
+
+The adapter receives the selected value, source, and confidence. If the selected value cannot be converted into a valid robot command, the fusion engine returns no decision.
+
+This conversion provides a boundary between the legacy command strings used by the perception and fusion components and the structured command object accepted by the robot controller.
+
+\subsection{Configurable Cross-Modal Confirmation}
+\label{subsec}
+
+In addition to the dedicated \texttt{confirmation} fusion mode, the engine supports configuration that can require cross-modal agreement for selected command categories.
+
+The currently implemented category is
+
+\begin{verbatim}
+continuous_motion
+\end{verbatim}
+
+which applies to commands whose structured robot action is \texttt{move}.
+
+If this category is enabled, a movement command selected by the normal fusion mode is accepted only when both voice and gesture are available and contain the same selected value:
+
+\begin{equation}
+v_v=v_g=v^{*}.
+\label{eq}
+\end{equation}
+
+If this agreement is absent, the command is not finalized during that processing cycle.
+
+This mechanism differs from the \texttt{confirmation} fusion mode. The mode requires agreement for every normal command, whereas \(\texttt{require\_confirmation\_for}\) allows agreement to be required only for configured command categories.
+
+The implementation also accepts the configuration concept of a high-speed category for forward compatibility, but no current command predicate maps to that category. It therefore does not affect command selection in the present implementation.
+
+\subsection{Duplicate-Command Suppression}
+\label{subsec}
+
+Duplicate suppression is performed during finalization, after arbitration and any required cross-modal confirmation.
+
+The engine stores the value and time of the most recently finalized command. A newly selected value is considered a duplicate when
+
+\begin{equation}
+v_t=v_{t-1}
+\quad\land\quad
+(t_t-t_{t-1})<T_d,
+\label{eq}
+\end{equation}
+
+where \(T_d\) is the configured duplicate-command cooldown converted from milliseconds to seconds.
+
+When this condition is satisfied, no new fusion decision is returned.
+
+Because duplicate checking is part of the common finalization procedure, it applies to commands selected by every fusion mode and also to repeated stop decisions.
+
+Once a command passes duplicate suppression, the engine stores its value and timestamp as the most recently finalized command.
+
+\subsection{Fusion Decision}
+\label{subsec}
+
+A successfully finalized fusion result is represented by a \texttt{FusionDecision}. It contains two elements:
+
+\begin{itemize}
+\item the structured \texttt{RobotCommand} that can be passed to the robot controller;
+\item a textual reason describing how the command was selected.
+\end{itemize}
+
+For an ordinary arbitration result, the reason records the active fusion mode in the form
+
+\begin{verbatim}
+mode=<selected mode>
+\end{verbatim}
+
+while stop decisions use reasons that indicate whether the stop overrode normal fusion or was received from both modalities.
+
+Filtering operations that remove an event do not themselves create a \texttt{FusionDecision}. If stale-event filtering, confidence filtering, failed confirmation, invalid command conversion, or duplicate suppression leaves no executable result, the fusion engine simply returns no command for that cycle.
+
+Figure~\ref{fig:fusion_decision} provides space for documenting the fusion behavior observed in the running application.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.92\textwidth]{08.png}
+    \caption{Multimodal fusion status and the resulting control decision.}
+    \label{fig:fusion_decision}
+\end{figure}
+
+
+
+
+
+
+
+
+
+\section{Robot Control}
+\label{sec:robot_control}
+
+The robot-control module forms the final stage of the command-processing pipeline. It receives validated robot commands after command interpretation and multimodal fusion and converts them into motion requests for the simulated youBot. The controller does not process microphone audio, speech transcripts, camera frames, or hand landmarks. These tasks are completed by the preceding modules before a command reaches the robot-control layer.
+
+The controller is implemented as a state machine with three operating states:
+
+\begin{equation}
+S \in
+\left{
+\texttt{idle},
+\texttt{moving},
+\texttt{rotating}
+\right}.
+\label{eq}
+\end{equation}
+
+The backward mode is supported internally by the robot controller, although it is not part of the canonical multimodal command vocabulary defined for the current experimental interface. Maintaining the movement mode separately from the controller state is useful during rotation because it allows the robot to remember whether translational motion was active before the turn.
+
+The Python controller communicates with the simulated mobile base through three motion components. These can be represented by the control vector
+
+\begin{equation}
+\mathbf{u}_{b} =
+\begin{bmatrix}
+v{\mathrm{lr}} \\
+v_{\mathrm{fb}} \\
+\omega
+\end{bmatrix},
+\label{eq}
+\end{equation}
+
+where \(v_{\mathrm{lr}}\) represents lateral left-right motion, \(v_{\mathrm{fb}}\) represents forward-backward motion, and \(\omega\) represents rotational motion.
+
+For forward movement, the controller sets the lateral and rotational components to zero and applies the configured linear speed to the forward-backward component:
+
+\begin{equation}
+\mathbf{u}_{\mathrm{forward}} =
+\begin{bmatrix}
+0 \\
+v_{\mathrm{linear}} \\
+0
+\end{bmatrix}.
+\label{eq}
+\end{equation}
+
+The controller also contains an internal backward mode, for which the sign of the forward-backward component is reversed:
+
+\begin{equation}
+\mathbf{u}{\mathrm{backward}} =
+\begin{bmatrix}
+0 \\
+-v_{\mathrm{linear}} \\
+0
+\end{bmatrix}.
+\label{eq}
+\end{equation}
+
+The values \(v_{\mathrm{linear}}\) and \(\omega_{\mathrm{angular}}\) are obtained from the robot configuration. The movement speed can therefore be adjusted without modifying the voice-recognition, gesture-recognition, or fusion logic.
+
+The behavior of the canonical commands used by the multimodal interface is summarized in Table~\ref{tab}.
+
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{|p{0.25\textwidth}|p{0.62\textwidth}|}
+\hline
+\textbf{Command} & \textbf{Implemented control behaviour} \\
+\hline
+\texttt{FORWARD} &
+Places the controller in the \texttt{moving} state and applies the configured positive forward velocity. \\
+\hline
+\texttt{LEFT} &
+Starts a counter-clockwise rotation of \(90^\circ\). \\
+\hline
+\texttt{RIGHT} &
+Starts a clockwise rotation of \(90^\circ\). \\
+\hline
+\texttt{TURN\_AROUND} &
+Starts a rotation of \(180^\circ\). \\
+\hline
+\texttt{STOP} &
+Places the controller in the \texttt{idle} state and immediately sends zero velocity to the robot. \\
+\hline
+\end{tabular}
+\caption{Canonical commands handled by the robot-control module.}
+\label{tab}
+\end{table}
+
+
+The three turning commands are implemented as fixed changes in the robot orientation. Their target angular displacements are defined as
+
+\begin{equation}
+\Delta\theta =
+\begin{cases}
++\dfrac{\pi}{2}, & \text{for \texttt{LEFT}},\\[0.5em]
+-\dfrac{\pi}{2}, & \text{for \texttt{RIGHT}},\\[0.5em]
+\pi, & \text{for \texttt{TURN\_AROUND}}.
+\end{cases}
+\label{eq}
+\end{equation}
+
+When a turn command is received, the controller first obtains the current orientation of the youBot from CoppeliaSim. The current yaw angle is then combined with the requested angular displacement to determine the desired target orientation:
+
+\begin{equation}
+\operatorname{wrapToPi}
+\left(
+\theta_{\mathrm{current}}+\Delta\theta
+\right).
+\end{equation}
+
+Wrapping the resulting angle to the interval around \(-\pi\) and \(+\pi\) prevents discontinuities when the orientation crosses the angular boundary.
+
+During rotation, the current orientation is read repeatedly from the simulator. The remaining angular error is calculated as
+
+\begin{equation} e_{\theta} = \operatorname{wrapToPi} \left( \theta_{\mathrm{target}} - \theta_{\mathrm{current}} \right). \label{eq:rotation_error} \end{equation}
+
+The direction of rotation is determined from the sign of this error:
+
+\begin{equation}
+d =
+\operatorname{sign}(e_{\theta}).
+\end{equation}
+
+The corresponding rotation command is therefore
+
+\begin{equation} 
+\mathbf{u}_{\mathrm{rotation}} = 
+\begin{bmatrix}
+0 \\ 0 \\ d \, \omega_{\mathrm{angular}} 
+\end{bmatrix}. 
+\end{equation}
+
+where \(\omega_{\mathrm{angular}}\) is the configured angular speed.
+
+The controller does not require the orientation to match the target value exactly. Rotation is considered complete when the magnitude of the remaining error becomes smaller than the configured angular tolerance:
+
+\begin{equation}
+|e_{\theta}|
+<
+\theta_{\mathrm{tol}},
+\end{equation}
+
+where \(\theta_{\mathrm{tol}}\) is defined by the configured rotation tolerance in degrees and converted internally to radians.
+
+Before starting a rotation, the controller stores the previous movement mode. When the target orientation is reached, the previous mode is restored. If the robot was moving forward before the turn, forward motion resumes automatically. The controller contains the same behavior for its internal backward mode. If no translational motion was active before the turn, the robot returns to the \texttt{idle} state and a zero-velocity request is transmitted.
+
+This behavior allows a turning command to temporarily interrupt continuous motion without permanently changing the movement mode.
+
+\subsection{Safety Supervision of Robot Motion}
+\label{subsec}
+
+Robot motion is supervised by a separate safety controller. The safety checks are performed before the normal movement and rotation state machine is evaluated. The implemented supervision consists of an emergency-stop mechanism and a dead-man timeout.
+
+When a normal \texttt{STOP} command is received, the controller immediately changes its movement mode to \texttt{stop}, enters the \texttt{idle} state, and sends a zero-velocity request.
+
+The stop operation is implemented by transmitting
+
+\begin{equation}
+\mathbf{u}_{\mathrm{stop}} =
+\begin{bmatrix}
+0 \\
+0 \\
+0
+\end{bmatrix}.
+\end{equation}
+
+The controller also accepts an internal emergency-stop action. When this action is received, the robot is first stopped in the same manner and the emergency-stop state maintained by the safety controller is then activated.
+
+While the emergency-stop state remains active, the normal movement and rotation logic is not executed. The emergency-stop state must be explicitly cleared before normal robot motion can continue.
+
+A second protection mechanism is provided by the dead-man timeout. Every validated command handled by the robot controller updates the stored time of the most recent command. Let \(t_{\mathrm{last}}\) denote this timestamp and \(t_{\mathrm{current}}\) the current monotonic system time. The period without a new command is
+
+
+\begin{equation}
+T_{\mathrm{inactive}} = t_{\mathrm{current}} - t_{\mathrm{last}}.
+\end{equation}
+
+If the robot is moving or rotating and this interval exceeds the configured dead-man timeout,
+
+\begin{equation}
+T_{\mathrm{inactive}} > T_{\mathrm{deadman}}
+\end{equation}
+
+where \(T_{\mathrm{deadman}}\) is defined in the safety configuration.
+
+The dead-man check affects active motion. If the robot is moving or rotating and no fresh validated command arrives before the timeout expires, the controller sends a zero-velocity request, changes the movement mode to \texttt{stop}, and returns to the \texttt{idle} state.
+
+This mechanism prevents continuous robot motion from remaining active indefinitely after command updates have stopped. The timing information is maintained inside the safety controller and does not depend on the internal state of the voice or gesture recognition modules.
+
+The order of the safety and motion checks in the controller can be summarized as
+
+\begin{equation}
+\text{Emergency Stop}
+\rightarrow
+\text{Dead-Man Check}
+\rightarrow
+\text{Movement State Machine}.
+\end{equation}
+
+Normal translational or rotational motion is evaluated only when neither safety condition requires the robot to remain stopped.
+
+\subsection{youBot Mobile Base}
+\label{subsec:youbot_base}
+
+The simulated youBot uses a mecanum-wheel mobile base. However, the Python controller does not calculate and transmit four individual wheel velocities. Instead, it sends high-level motion signals to the CoppeliaSim scene.
+
+The three signals used by the implementation are:
+
+\begin{itemize}
+\item \texttt{leftRightVel},
+\item \texttt{forwBackVel},
+\item \texttt{rotVel}.
+\end{itemize}
+
+These signals correspond to the three components of the base-motion vector in Equation~\ref{eq}. The Python application therefore transmits
+
+\begin{equation}
+\mathbf{u}_{b}
+\longrightarrow
+\left(
+\texttt{leftRightVel},
+\texttt{forwBackVel},
+\texttt{rotVel}
+\right).
+\label{eq}
+\end{equation}
+
+
+For the commands currently exposed by the multimodal interface, the lateral component is not used by the Python robot controller and is set to zero. Forward motion is produced through \texttt{forwBackVel}, while turning is produced through \texttt{rotVel}.
+
+The conversion from these high-level signals to the motion of the individual mecanum wheels is not performed in the Python \texttt{RobotController}. The Python side therefore remains independent of the wheel-level implementation used by the CoppeliaSim scene.
+
+
+\section{Communication with CoppeliaSim}
+\label{sec}
+
+Communication between the Python application and the simulated youBot is implemented using the CoppeliaSim ZeroMQ remote API. A dedicated communication class owns the connection and provides the robot controller with the limited simulator operations required during execution.
+
+By default, the client connects to CoppeliaSim on the local computer using port (23000). It then obtains the simulation object and retrieves the robot using the object path \texttt{/youBot}.
+
+The connection procedure can be summarized as follows:
+
+\begin{enumerate}
+\item create a ZeroMQ remote API client;
+\item obtain access to the CoppeliaSim \texttt{sim} object;
+\item query the current simulation time to verify communication;
+\item retrieve the simulated robot object using the configured object path;
+\item provide position, orientation, and velocity-signal operations to the robot controller.
+\end{enumerate}
+
+The communication component exposes the current position and orientation of the youBot when these values are required by the controller. In particular, orientation feedback is used during rotational commands to calculate the angular error defined in Equation~\ref{eq}.
+
+Movement requests are sent to CoppeliaSim as floating-point signals. Conceptually, the communication operation is
+
+\begin{equation}
+\begin{aligned}
+v_{\mathrm{lr}}
+&\rightarrow
+\texttt{leftRightVel},\
+v_{\mathrm{fb}}
+&\rightarrow
+\texttt{forwBackVel},\
+\omega
+&\rightarrow
+\texttt{rotVel}.
+\end{aligned}
+\label{eq}
+\end{equation}
+
+The communication class also provides a connection check. If the simulation object has not been initialized, the connection is considered unavailable. Otherwise, the application attempts to obtain the current simulation time. A communication exception causes the connection check to return a failure state.
+
+Keeping simulator communication in a dedicated component prevents the voice, gesture, and fusion modules from communicating directly with CoppeliaSim. This preserves the modular structure of the application and keeps simulator-specific operations separate from perception and decision-making.
+
+The complete control path from a selected multimodal command to the simulation can therefore be summarized as
+
+\begin{equation}
+\begin{aligned}
+\text{Validated Command}
+&\rightarrow
+\text{Robot Controller}
+\rightarrow
+\text{Base Motion Signals} \\
+&\rightarrow
+\text{ZeroMQ Remote API}
+\rightarrow
+\text{CoppeliaSim youBot}.
+\end{aligned}
+\label{eq:robot_control_flow}
+\end{equation}
+
+\begin{figure}[H]
+    \centering
+    \IfFileExists{09.png}
+        {\includegraphics[width=0.94\textwidth]{09.png}}
+        {\fbox{\parbox[c][0.29\textheight][c]{0.90\textwidth}{\centering
+        \textbf{Screenshot placeholder for \texttt{09.png}}\\[0.6em]
+        Add a screenshot showing the running CoppeliaSim scene and the youBot
+        responding to a command from the multimodal application.}}}
+    \caption{Execution of a robot-control command in the CoppeliaSim environment.}
+    \label{fig:robot_execution}
+\end{figure}
+\section{Asynchronous Processing and Data Flow}
+\label{sec:asynchronous_processing}
+
+The components of the application operate at different processing rates and have different computational requirements. Camera acquisition is continuous, while a spoken command must pass through audio capture, voice-activity detection, transcription, and intent resolution before a command event is available. Gesture recognition similarly requires image acquisition, landmark estimation, geometric classification, and temporal confirmation. Running all of these operations directly on the graphical-interface thread would make the interface unresponsive whenever a slower recognition operation is being performed.
+
+For this reason, the graphical version of the application separates the main processing tasks into independent workers. The implementation uses three PySide6 \texttt{QThread}-based workers:
+
+\begin{itemize}
+\item \texttt{VoiceWorker}, responsible for polling the voice-processing pipeline;
+\item \texttt{GestureWorker}, responsible for polling the gesture-processing pipeline; and
+\item \texttt{RobotWorker}, responsible for multimodal fusion, command execution, safety-state updates, and periodic robot-controller updates.
+\end{itemize}
+
+The three workers are created by the \texttt{ServiceWorkers} component and are moved to separate \texttt{QThread} objects. This keeps speech recognition and gesture processing away from the graphical-interface thread and allows the interface to remain responsive while perception is running.
+
+The general processing structure of the graphical application can be represented as
+
+\begin{equation}
+\begin{aligned}
+\text{Voice Pipeline}
+&\longrightarrow
+\text{VoiceWorker}
+\longrightarrow
+\text{Shared Events},\\
+\text{Gesture Pipeline}
+&\longrightarrow
+\text{GestureWorker}
+\longrightarrow
+\text{Shared Events},\\
+\text{Shared Events}
+&\longrightarrow
+\text{RobotWorker}
+\longrightarrow
+\text{Fusion}
+\longrightarrow
+\text{Robot Controller}.
+\end{aligned}
+\label{eq:gui_processing_flow}
+\end{equation}
+
+Voice and gesture events are exchanged through a small shared data structure rather than through an unbounded command queue. The implementation stores the most recent voice event and the most recent gesture event in a lock-protected object. Access to this shared state is protected by a Python \texttt{Lock}, allowing one worker to update an event while the robot worker safely obtains a consistent snapshot.
+
+Conceptually, this mechanism can be represented as
+
+\begin{equation}
+\left(
+E_v,E_g
+\right)
+\longrightarrow
+\text{Locked Shared State}
+\longrightarrow
+\text{Fusion Snapshot}.
+\label{eq:shared_event_flow}
+\end{equation}
+
+The \texttt{VoiceWorker} repeatedly calls the voice pipeline and publishes a new voice event only when a recognized command is available. Waveform information and voice-processing state are sent separately to the graphical interface using Qt signals.
+
+The \texttt{GestureWorker} follows a similar pattern. It repeatedly polls the gesture pipeline, updates the shared gesture event, and sends the current camera frame and gesture status to the interface. The gesture event includes its processing state, allowing the fusion layer to reject observations that have not reached the \texttt{confirmed} state.
+
+Camera acquisition is additionally separated from gesture inference. The camera component runs its own background thread and stores only the newest available frame in a queue with a maximum size of one. If a new frame arrives before the previous frame has been consumed, the older frame is discarded.
+
+This behavior can be summarized as
+
+\begin{equation}
+\text{Camera}
+\longrightarrow
+\text{Single-Frame Buffer}
+\longrightarrow
+\text{Gesture Processing}.
+\label{eq:camera_buffer}
+\end{equation}
+
+Keeping only the most recent image prevents the gesture pipeline from processing a growing backlog of old camera frames. This is particularly important for robot interaction because an older frame may no longer represent the user's current hand pose.
+
+Audio acquisition uses a related bounded-buffer approach. The microphone is opened through \texttt{sounddevice}, and its callback places captured audio chunks into a bounded queue. The default implementation allows a limited number of chunks to be stored. If the queue becomes full, the oldest chunk is removed before the newest one is inserted.
+
+The audio data flow can therefore be represented as
+
+\begin{equation}
+\text{Microphone Callback}
+\longrightarrow
+\text{Bounded Audio Queue}
+\longrightarrow
+\text{Voice Pipeline}.
+\label{eq:audio_buffer}
+\end{equation}
+
+This prevents audio capture from creating an indefinitely growing buffer when speech processing temporarily requires more time than audio acquisition.
+
+The \texttt{RobotWorker} operates differently from the voice and gesture workers. Instead of using a continuous blocking loop, it uses a \texttt{QTimer}. The timer is configured with a 50~ms interval. On each timer event, the worker obtains the most recent voice and gesture events from the shared state, passes them to the fusion engine, submits any resulting command for validation and execution, and calls the robot controller's \texttt{step()} method.
+
+The periodic robot-processing cycle can be represented as
+
+\begin{equation}
+\text{Event Snapshot}
+\rightarrow
+\text{Fusion}
+\rightarrow
+\text{Command Validation}
+\rightarrow
+\text{Robot Execution}
+\rightarrow
+\text{Controller Step}.
+\label{eq:robot_worker_cycle}
+\end{equation}
+
+Using a timer for this worker also allows manual commands, emergency-stop requests, and resume requests from the interface to be delivered through queued Qt signal connections without directly manipulating the robot controller from the graphical-interface thread.
+
+Communication with the interface is performed through Qt signals. The processing workers do not directly modify graphical widgets. Instead, they emit state objects containing information such as voice status, gesture status, recognized commands, robot state, and log messages. The interface receives these signals and updates its visual components independently of the recognition and robot-control operations.
+
+This separation is particularly important for model inference. Whisper transcription, gesture inference, and optional Qwen-based intent resolution are executed through the processing workers rather than on the graphical-interface thread. A slower recognition operation can therefore increase the latency of its own modality without freezing the complete user interface.
+
+The startup sequence also follows the threaded structure. In graphical mode, the robot worker starts first and initializes the common services, including the CoppeliaSim connection, robot controller, enabled models, and input pipelines. Once initialization has completed successfully, the voice and gesture worker threads are started when their corresponding modalities are enabled.
+
+The application also provides a headless execution mode. In this mode, the graphical worker structure is not used. Instead, the application runs a single control loop that polls the voice pipeline, polls the gesture pipeline, resolves the available events through the same fusion engine, executes the resulting command, advances the robot controller, and then waits briefly before beginning the next iteration.
+
+The headless processing sequence is therefore
+
+\begin{equation}
+\text{Voice Poll}
+\rightarrow
+\text{Gesture Poll}
+\rightarrow
+\text{Fusion}
+\rightarrow
+\text{Robot Control}
+\rightarrow
+\text{Next Cycle}.
+\label{eq:headless_processing}
+\end{equation}
+
+Although the scheduling mechanism differs between graphical and headless operation, both modes use the same underlying voice, gesture, fusion, command-validation, safety, and robot-control components. This avoids maintaining separate decision logic for the two execution modes.
+
+Controlled shutdown is handled through a common application cleanup procedure. When shutdown begins, the emergency-stop state is activated and the robot is commanded to stop. The gesture and voice pipelines are then stopped, their input resources are released, and the graphical worker threads are asked to terminate. The application waits for the threads to finish before completing shutdown.
+
+This processing structure allows acquisition, recognition, interface updates, fusion, and robot control to operate without unnecessarily blocking one another while keeping the most recent multimodal information available to the decision layer.
+
+
+\section{System Configuration}
+\label{sec:system_configuration}
+
+Configuration is separated from the recognition and control logic. This makes it possible to change devices, thresholds, languages, fusion behaviour, and robot speed without rewriting the individual modules.
+
+The configurable values include:
+
+\begin{itemize}
+    \item activation or deactivation of voice recognition;
+    \item activation or deactivation of gesture recognition;
+    \item selected voice language;
+    \item microphone device;
+    \item camera device;
+    \item voice-processing threshold values;
+    \item gesture-processing threshold values;
+    \item gesture-confirmation settings;
+    \item duplicate-suppression interval;
+    \item stale-event timeout;
+    \item selected fusion mode;
+    \item modality-priority setting;
+    \item activation of the Qwen3 fallback;
+    \item translational movement speed;
+    \item rotational speed;
+    \item CoppeliaSim communication settings; and
+    \item graphical-interface and logging options.
+\end{itemize}
+
+The relevant configuration values are provided to the modules during application initialization. Where runtime modification is supported by the interface, the new value is validated before it is applied.
+
+Validation prevents unsuitable values from entering the processing logic. Examples include unsupported device identifiers, invalid fusion modes, negative time intervals, and threshold values outside the accepted range.
+
+\begin{figure}[H]
+    \centering
+    \IfFileExists{10.png}
+        {\includegraphics[width=0.92\textwidth]{10.png}}
+        {\fbox{\parbox[c][0.28\textheight][c]{0.88\textwidth}{\centering
+        \textbf{Screenshot placeholder for \texttt{10.png}}\\[0.6em]
+        Add a screenshot of the configuration panel showing device selection,
+        modality controls, thresholds, fusion mode, and robot-speed settings.}}}
+    \caption{Configuration controls of the multimodal application.}
+    \label{fig:configuration_interface}
+\end{figure}
+
+\section{Graphical User Interface}
+\label{sec:graphical_interface}
+
+The graphical interface provides one location for operating and monitoring the system. It displays the state of the input devices, recognition modules, fusion process, simulator communication, and robot controller.
+
+The interface does not replace the recognition or safety logic. It presents information from the modules and allows supported configuration values to be changed. The command is still validated by the processing components before execution.
+
+The main functional areas of the interface include:
+
+\begin{itemize}
+    \item live camera preview;
+    \item detected hand landmarks;
+    \item candidate and confirmed gesture information;
+    \item microphone activity or waveform information;
+    \item listening and speech-detection state;
+    \item recognized transcript;
+    \item resolved voice command;
+    \item current voice and gesture events;
+    \item final fusion decision and decision reason;
+    \item CoppeliaSim connection status;
+    \item current robot command;
+    \item configuration controls; and
+    \item timestamped system logs.
+\end{itemize}
+
+The live camera preview helps the user determine whether the hand is visible and whether the landmark detector is operating. The voice area shows whether the system is listening and what transcript was produced. The fusion area connects the two modalities by displaying the accepted events and the final selected command.
+
+The logging area records important events such as device initialization, simulator connection, speech detection, transcription, command resolution, gesture confirmation, event rejection, fusion conflict resolution, robot-command transmission, and processing errors.
+
+\begin{figure}[H]
+    \centering
+    \IfFileExists{11.png}
+        {\includegraphics[width=0.94\textwidth]{11.png}}
+        {\fbox{\parbox[c][0.33\textheight][c]{0.90\textwidth}{\centering
+        \textbf{Screenshot placeholder for \texttt{11.png}}\\[0.6em]
+        Add a full-window screenshot of the running graphical interface,
+        including camera, voice, gesture, fusion, robot, and log areas.}}}
+    \caption{Main graphical interface of the multimodal robot-control application.}
+    \label{fig:gui_overview}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \IfFileExists{12.png}
+        {\includegraphics[width=0.92\textwidth]{12.png}}
+        {\fbox{\parbox[c][0.27\textheight][c]{0.88\textwidth}{\centering
+        \textbf{Screenshot placeholder for \texttt{12.png}}\\[0.6em]
+        Add a screenshot of the runtime logs showing initialization,
+        recognition, filtering, fusion, communication, and error messages.}}}
+    \caption{Runtime event and error log displayed by the application.}
+    \label{fig:system_log_interface}
+\end{figure}
+
+\section{Error Handling and Reliability}
+\label{sec:error_handling}
+
+
+The application includes error-handling mechanisms at several stages of the multimodal processing pipeline. The main objective is to prevent recognition, interpretation, or communication errors from being converted into unintended robot motion and to keep failures isolated where the implementation allows it.
+
+During normal graphical operation, voice and gesture processing run in separate workers. A processing exception in one worker is therefore handled independently from the other modality. For example, if voice polling raises an exception, the voice worker reports an error state and continues attempting to process later input. The gesture worker follows a similar pattern and continues its processing loop after a gesture-pipeline exception. This separation prevents a temporary runtime recognition error in one modality from directly terminating the other modality.
+
+The behavior during application initialization is stricter. CoppeliaSim communication and the enabled voice and gesture services are created through the common startup procedure. If a required device or service cannot be initialized and raises an exception during this stage, startup is reported as unsuccessful rather than silently continuing with a partially initialized system. The individual modalities can instead be enabled or disabled through configuration before the application is started.
+
+The application handles or rejects several types of abnormal input and processing conditions:
+
+\begin{itemize}
+\item absence of microphone data
+\item failure during speech transcription
+\item empty or unresolved speech input
+\item voice-command confidence below the configured acceptance threshold
+\item unavailable or failed Qwen3 fallback
+\item invalid JSON or out-of-vocabulary output from the local language model
+\item absence of a camera frame
+\item no hand detected in the current frame
+\item a hand configuration that does not match an implemented gesture
+\item gesture events that have not reached the \texttt{confirmed} state
+\item gesture-processing exceptions
+\item stale voice or gesture events
+\item events below the modality-specific fusion confidence threshold
+\item duplicate commands within the configured cooldown interval
+\item commands that cannot be converted into a valid \texttt{RobotCommand}
+\item commands rejected by the command validator
+\item failure during CoppeliaSim communication or robot processing and
+\item unexpected errors in the main application loop.
+\end{itemize}
+
+Voice-processing failures are handled conservatively. If no audio chunk is available, the voice pipeline simply produces no event for that polling cycle. If transcription raises an exception, the error is logged and no voice command is generated. Similarly, if the transcript cannot be resolved by the rule-based and optional Qwen3 intent stages, the intent engine returns no event.
+
+The Qwen3 component is treated as an optional fallback rather than a required part of voice control. If Ollama is unreachable, a request times out, the response is not valid JSON, schema validation fails, or the proposed command is outside the supported vocabulary, the fallback returns no result. These conditions therefore do not cause an arbitrary language-model output to enter the robot-control path.
+
+The gesture branch follows the same general principle. If no camera frame is currently available, the pipeline produces no new inference result. If a frame is available but no hand is detected, the gesture smoother receives no recognized gesture and returns to the \texttt{idle} state. A detected hand that does not satisfy one of the implemented geometric rules is also treated as the absence of a gesture rather than being assigned to the nearest command.
+
+Gesture events must additionally reach the \texttt{confirmed} state before they can participate in multimodal fusion. Events in the \texttt{idle}, \texttt{candidate}, or \texttt{cooldown} states are not treated as eligible gesture commands by the fusion layer.
+
+The fusion component provides another reliability boundary. Stale events and events below the configured source-specific confidence threshold are removed before arbitration. If both modalities are unavailable after filtering, the fusion engine produces no decision. A command that cannot be converted into the structured robot-command representation is also rejected rather than forwarded for execution.
+
+A further validation stage is applied before a fused or manually submitted command reaches the robot controller. The command validator checks the command structure, verifies that its action is permitted by the configured whitelist, confirms that the action and direction form a recognized combination, and constrains speed and duration values to the configured limits. A rejected command is logged and is not executed.
+
+The overall failure-handling principle can therefore be summarized as
+
+\begin{equation}
+\text{Invalid, unresolved, or rejected input}
+\quad\Longrightarrow\quad
+\text{No new robot command}.
+\label{eq:uncertain_input}
+\end{equation}
+
+The system does not replace an unresolved input with an estimated or arbitrary movement. This behavior keeps recognition uncertainty separate from robot actuation and reduces the possibility that an error in one processing stage will be interpreted as a valid movement request.
+
+Runtime errors are also reported through logging and, where supported by the graphical application, through component status updates. The voice worker explicitly reports an error processing state when voice polling fails, while command-validation results and fusion decisions are reflected in the robot-control status shown by the interface. This helps distinguish errors originating from perception, intent resolution, multimodal fusion, validation, or robot execution.
+
+The headless execution mode provides an additional safety response for unexpected exceptions in its main processing loop. If such an exception occurs, the error is logged, the emergency-stop state is activated, and the robot controller is stepped so that the safety condition can take effect. Application shutdown similarly activates the emergency-stop state and attempts to send a zero-velocity request before releasing the gesture and voice resources.
+
+These mechanisms provide fault handling appropriate to the simulated prototype. They do not imply complete fault tolerance, particularly during startup or loss of the simulator connection. Instead, the design follows a conservative principle in which unavailable or invalid information is prevented from becoming a new robot movement command.
+
+
+\section{Safety Considerations}
+\label{sec:safety_considerations}
+
+Although the system is evaluated in simulation, several software-level safety mechanisms are included in the implementation.
+
+A valid \texttt{STOP} command has priority over normal multimodal arbitration and is forwarded to the robot controller before ordinary movement commands are considered. The robot-control layer also includes an emergency-stop state and a dead-man timeout, which stops active motion when no fresh validated command is received within the configured interval.
+
+Commands that are unsupported, stale, below the required confidence threshold, or otherwise invalid do not generate a new robot movement request.
+
+The implemented safety behaviour can therefore be summarized as
+
+\begin{equation}
+\text{Valid safety condition}
+\quad\Longrightarrow\quad
+\text{Robot stop request},
+\end{equation}
+
+and
+
+\begin{equation}
+\text{Invalid or rejected input}
+\quad\Longrightarrow\quad
+\text{No new movement request}.
+\end{equation}
+
+These mechanisms provide software-level protection for the simulated system and support predictable command execution. They should not be interpreted as sufficient safety measures for operation on physical hardware.
+
+A physical implementation would require additional safeguards such as a hardware emergency stop, obstacle detection, collision monitoring, velocity and workspace limits, communication watchdogs, and an appropriate robot-safety assessment.
+
+\section{Performance Considerations}
+\label{sec:performance_considerations}
+
+The application is designed to run locally on a standard laptop, so the implementation attempts to avoid unnecessary inference, repeated model initialization, and the accumulation of outdated input data. The objective is not to remove all computational cost, but to reserve the more expensive processing stages for situations in which they are actually required.
+
+Several measures are used throughout the application to reduce unnecessary processing:
+
+\begin{itemize}
+\item microphone audio is passed to Whisper only after the voice-activity detector has identified and completed a speech segment;
+\item the Whisper model is created once during application initialization and reused for subsequent utterances;
+\item the speech recognizer uses the \texttt{faster-whisper} implementation with CPU-oriented \texttt{int8} computation by default;
+\item transcription uses a beam size of one, limiting the amount of decoding search performed for each utterance;
+\item transcript normalization and rule-based intent matching are attempted before the optional Qwen3 fallback;
+\item fuzzy command matching is also evaluated before Qwen3 is invoked;
+\item the Qwen3 fallback is used only when the earlier intent-resolution stages cannot determine a supported command;
+\item the MediaPipe hand-landmark detector is created once and reused for incoming camera frames;
+\item gesture classification is performed using lightweight geometric rules rather than an additional trained gesture-classification network;
+\item temporal confirmation prevents an isolated frame-level classification from immediately becoming a command;
+\item a cooldown prevents the same held gesture from producing commands on every processed frame;
+\item the camera component stores only the most recent frame instead of building a queue of older images;
+\item stale multimodal events are removed before fusion;
+\item repeated commands are suppressed during fusion before they reach the robot controller; and
+\item model inference and robot processing are separated from graphical-interface rendering during GUI operation.
+\end{itemize}
+
+The voice-processing pipeline avoids continuous speech-model inference. Audio is first evaluated by the voice-activity detector, which accumulates samples until a complete utterance has been identified. Periods containing no speech are not submitted to the speech recognizer.
+
+The main voice-processing sequence can therefore be represented as
+
+\begin{equation}
+\begin{aligned}
+\text{Microphone Audio}
+&\longrightarrow
+\text{Voice Activity Detection}
+\longrightarrow
+\text{Completed Utterance}\\
+&\longrightarrow
+\text{Whisper Transcription}
+\longrightarrow
+\text{Text Normalization}\\
+&\longrightarrow
+\text{Rule and Fuzzy Matching}
+\longrightarrow
+\text{Optional Qwen3 Fallback}\\
+&\longrightarrow
+\text{Confidence Validation}
+\longrightarrow
+\text{Voice Event}.
+\end{aligned}
+\label{eq:efficient_voice_pipeline}
+\end{equation}
+
+This order is important because the local language model is not called for every spoken command. Transcripts that can be resolved using the simpler intent-processing stages do not require Qwen inference.
+
+The Whisper implementation is also configured for local CPU execution. The current transcriber uses \texttt{faster-whisper} with \texttt{int8} computation by default. The model instance is initialized once and reused instead of being loaded again for each utterance. This avoids repeated startup cost during normal interaction.
+
+The gesture pipeline follows a similar principle. MediaPipe performs hand-landmark estimation, while the application uses geometric relationships between the resulting landmarks to classify the gesture. No additional trained gesture classifier is required for the current five-value gesture vocabulary.
+
+The visual-processing sequence is
+
+\begin{equation}
+\begin{aligned}
+\text{Camera Frame}
+&\longrightarrow
+\text{MediaPipe Hand Landmarks}
+\longrightarrow
+\text{Geometric Classification}\\
+&\longrightarrow
+\text{Temporal Confirmation}
+\longrightarrow
+\text{Gesture Event}.
+\end{aligned}
+\label{eq:efficient_gesture_pipeline}
+\end{equation}
+
+Camera acquisition is performed independently from landmark inference. Only one unprocessed frame is retained at a time. If a newer frame becomes available before the previous frame has been consumed, the older frame is discarded. This prevents the gesture pipeline from processing a growing sequence of frames that no longer represent the current hand pose.
+
+Temporal confirmation provides a second form of control over gesture-event generation. A recognized pose must remain consistent for the configured number of observations before it reaches the confirmed state. After confirmation, a cooldown is applied before the same pose can be confirmed again. Consequently, a hand pose can remain visible without generating a new command from every camera frame.
+
+The fusion layer also removes information that no longer needs to continue through the control pipeline. Events older than the configured stale-event timeout are rejected before arbitration, while a selected command that repeats the previously finalized value within the configured cooldown interval does not create another fusion decision. These checks reduce unnecessary robot-control requests while keeping the fusion layer focused on recent input.
+
+During graphical operation, computationally heavier processing is kept outside the main user-interface thread. Voice processing, gesture processing, fusion, and robot-control activities are handled through the worker structure described in Section~\ref{sec:asynchronous_processing}. This prevents speech transcription or optional language-model inference from directly blocking graphical-interface updates.
+
+The application also uses bounded buffers in several parts of the processing pipeline. Camera acquisition keeps only the newest frame, while microphone capture uses a bounded queue for incoming audio. This limits the amount of old sensor data retained when a downstream component temporarily requires more processing time.
+
+These measures are intended to make local execution practical without changing the functional behaviour of the multimodal system. They also keep the processing architecture predictable by using lightweight operations whenever possible and invoking the more computationally demanding components only when required.
+
+This chapter describes the design choices used to control computational cost, but it does not assume a particular performance result. Measured transcription latency, gesture-processing rate, end-to-end response time, processor utilization, and memory consumption are evaluated experimentally and reported separately in the results chapter.
+
+
+\section{System Verification Procedure}
+\label{sec:verification_procedure}
+
+Before carrying out the experimental evaluation, the implemented system is verified at both module level and as a complete control pipeline. This makes it easier to identify the source of an incorrect response. For example, an unexpected robot action may originate from speech transcription, intent resolution, gesture classification, fusion, command validation, simulator communication, or robot control.
+
+The purpose of this verification stage is to confirm that the software components behave according to their implementation. Numerical measures such as recognition accuracy, latency, processor utilization, and end-to-end success rate are evaluated separately and reported in the results chapter.
+
+\subsection{Voice-Module Verification}
+\label{subsec:voice_verification}
+
+The voice-processing module is checked from microphone acquisition to command generation. The verification confirms that audio can be captured, speech segments are detected, Whisper produces a transcript, and the transcript is passed through normalization and intent resolution.
+
+Supported command expressions are tested together with silence, non-command speech, and phrases that cannot be resolved to a valid command. The rule-based and fuzzy matching stages are checked before the optional Qwen3 fallback.
+
+When the local language-model fallback is enabled, the verification confirms that it is used only when the preceding intent-resolution stages do not produce an acceptable result. Invalid, unavailable, or unsupported language-model responses must not create a robot command.
+
+The verification also distinguishes between transcription and interpretation errors. If Whisper produces the expected transcript but the resulting command is incorrect, the problem belongs to intent resolution. If the transcript itself changes the intended meaning, the error originates earlier in the speech-recognition pipeline.
+
+\subsection{Gesture-Module Verification}
+\label{subsec:gesture_verification}
+
+The gesture-processing module is verified from camera acquisition to generation of a confirmed gesture event. The checks include camera access, hand-landmark detection, rule-based classification, confidence generation, temporal confirmation, and cooldown behaviour.
+
+Each gesture implemented by the current classifier is tested separately. These are:
+
+\begin{itemize}
+\item \texttt{go},
+\item \texttt{back},
+\item \texttt{stop},
+\item \texttt{left},
+\item \texttt{right}.
+\end{itemize}
+
+The verification also includes frames containing no detected hand and hand configurations that do not satisfy any of the implemented geometric rules. These cases should not produce a valid gesture command.
+
+A gesture held in front of the camera is additionally observed to verify the candidate, confirmed, and cooldown states. This confirms that recognition from one frame is not treated as an immediate repeated command and that a continuously visible pose does not generate an uncontrolled sequence of commands.
+
+The camera preview and application status are used to compare the detected landmarks with the classifier result. This makes it possible to distinguish a hand-detection problem from an error in geometric classification or temporal confirmation.
+
+\subsection{Fusion Verification}
+\label{subsec:fusion_verification}
+
+The fusion engine is verified using known voice and gesture events for which the expected result can be determined directly from the configured fusion policy.
+
+The verification covers the main filtering and arbitration behaviour, including:
+
+\begin{itemize}
+\item voice input without an eligible gesture event
+\item gesture input without an eligible voice event
+\item agreement between voice and gesture
+\item conflicting inputs in \texttt{voice\_priority} mode
+\item conflicting inputs in \texttt{gesture\_priority} mode
+\item selection of the most recent event in \texttt{latest\_wins} mode
+\item confidence-based selection when both events are available
+\item agreement requirements in \texttt{confirmation} mode
+\item supported behaviour of the \texttt{combined} mode
+\item stale-event rejection
+\item modality-specific minimum-confidence filtering
+\item duplicate-command suppression
+\item configured cross-modal confirmation for continuous movement; and
+\item conflicts containing a valid \texttt{stop} event.
+\end{itemize}
+
+The stop cases are checked separately because the stop override is evaluated before ordinary fusion-mode selection. Whenever an eligible \texttt{stop} event is present, normal movement or turning commands must not override it.
+
+The output of this verification is compared with the structured \texttt{FusionDecision} produced by the fusion engine, including the selected robot command and the reported decision reason.
+
+\subsection{Robot-Control and Communication Verification}
+\label{subsec:robot_verification}
+
+Robot-control verification begins independently from voice and gesture recognition. Validated commands are supplied directly to the robot-control layer so that the behaviour of the controller and the CoppeliaSim communication interface can be checked without introducing perception errors.
+
+Forward motion is verified by observing the configured forward velocity in the simulated robot. The left and right commands are checked against their approximately \(90^\circ\) target rotations, while the turn-around command is checked against its approximately \(180^\circ\) target rotation.
+
+The orientation-feedback mechanism is also observed to confirm that rotation continues until the angular error falls below the configured tolerance. When a turn begins during an existing movement mode, the verification checks that the previous movement mode is restored after the target orientation is reached.
+
+The \texttt{STOP} command is tested during both translational and rotational motion. The emergency-stop state and dead-man timeout are also checked to confirm that they force the controller to the \texttt{idle} state and result in a zero-velocity request.
+
+Communication with CoppeliaSim is verified by checking the ZeroMQ connection, access to the configured \texttt{/youBot} object, orientation feedback, and transmission of the \texttt{leftRightVel}, \texttt{forwBackVel}, and \texttt{rotVel} signals.
+
+\subsection{End-to-End Verification}
+\label{subsec:end_to_end_verification}
+
+After the individual modules have been checked, the complete processing path is verified using voice input, gesture input, and selected multimodal combinations.
+
+An end-to-end trial follows the sequence
+
+\begin{equation}
+\begin{aligned}
+\text{User Input}
+&\longrightarrow
+\text{Recognition}
+\longrightarrow
+\text{Command Interpretation}\\
+&\longrightarrow
+\text{Fusion}
+\longrightarrow
+\text{Command Validation}\\
+&\longrightarrow
+\text{Robot Control}
+\longrightarrow
+\text{CoppeliaSim}.
+\end{aligned}
+\label{eq:end_to_end_verification}
+\end{equation}
+
+A trial is considered functionally correct when the input produces the intended recognized command, the fusion engine selects the expected result, the command passes validation, and the corresponding motion is observed in the simulated youBot.
+
+The graphical interface and system logs provide supporting information during this verification. They allow the recognized voice or gesture input, fusion result, robot state, and simulator response to be inspected within the same execution.
+
+
+\section{Methodology Summary}
+\label{sec:methodology_summary}
+
+This chapter described the methodology used to implement the offline multimodal robot-control system introduced in Chapter~1 and developed in relation to the human-robot interaction approaches reviewed in Chapter~2. The application combines local speech processing, camera-based hand-landmark detection, command interpretation, multimodal fusion, safety supervision, and control of a simulated youBot in CoppeliaSim.
+
+The voice-processing pipeline begins with microphone acquisition and voice-activity detection. Audio is accumulated until a complete speech segment is available and is then transcribed locally using the multilingual Whisper model. The resulting text is normalized and passed to the intent-resolution component. Rule-based and fuzzy command matching are evaluated before the optional Qwen3 fallback. If none of these stages produces an acceptable supported command, no voice command is generated.
+
+The gesture-processing pipeline acquires RGB camera frames using OpenCV and obtains hand landmarks through MediaPipe. The current classifier constructs a hand-local coordinate system and evaluates geometric relationships between selected finger landmarks. It directly recognizes the values \texttt{go}, \texttt{back}, \texttt{stop}, \texttt{left}, and \texttt{right}. Candidate classifications pass through temporal processing before a gesture reaches the \texttt{confirmed} state, while cooldown behaviour limits repeated confirmation of a continuously held pose.
+
+Voice and confirmed gesture events are normalized before multimodal arbitration. The fusion engine removes stale events and events below their modality-specific confidence thresholds before applying the configured decision mode. The implementation supports voice-only and gesture-only operation, modality-priority modes, latest-event selection, confidence-based selection, explicit cross-modal confirmation, and a limited combined mode.
+
+A valid \texttt{stop} input is checked before ordinary fusion-mode arbitration. The fusion engine can also require agreement between both modalities for configured command categories such as continuous movement. After a candidate command has been selected and converted into a structured \texttt{RobotCommand}, duplicate-command suppression is applied before the final fusion decision is released.
+
+The robot-control component receives validated structured commands and operates as a state machine with \texttt{idle}, \texttt{moving}, and \texttt{rotating} states. Forward movement uses the configured linear velocity, while left, right, and turn-around actions are implemented as target rotations of  \(90^\circ\), \(-90^\circ\), and \(180^\circ\), respectively. Orientation feedback from CoppeliaSim is used to determine when a requested rotation has reached the configured angular tolerance.
+
+Communication with the simulation is performed through the CoppeliaSim ZeroMQ remote API. The Python application sends the high-level signals \texttt{leftRightVel}, \texttt{forwBackVel}, and \texttt{rotVel} to the simulation and obtains robot orientation when required by the rotation controller.
+
+Robot motion is additionally supervised by an emergency-stop state and a dead-man timeout. A stop command produces a zero-velocity request, while the dead-man mechanism stops active movement when no fresh validated command has been received within the configured interval.
+
+During graphical operation, the main processing activities are separated using PySide6 worker threads. Voice and gesture workers update shared event state, while the robot worker periodically obtains the latest events, performs fusion, and advances the robot controller. Camera and microphone acquisition use bounded buffering so that outdated sensor data does not accumulate when a downstream operation temporarily requires additional processing time.
+
+The chapter also described system configuration, graphical monitoring, performance-related design choices, error handling, software-level safety mechanisms, and the verification procedure used to check the individual modules and the complete command path. These methods establish how the implemented prototype operates and provide the basis for the quantitative evaluation presented in the following chapter.
+
+Numerical results are intentionally not introduced in the methodology. Recognition accuracy, command success rate, response time, computational performance, and other measured results must be obtained from the final experimental configuration and reported separately.

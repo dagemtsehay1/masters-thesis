@@ -67,68 +67,106 @@ class Application:
     def start_services(self) -> None:
         """Builds the CoppeliaSim connection, robot controller, and the
         enabled detectors. Called by `run_headless()` directly, and by
-        `src.ui.workers.RobotWorker.start()` on its own thread for the GUI."""
+        `src.ui.workers.RobotWorker.start()` on its own thread for the GUI.
+
+        The three subsystems below (CoppeliaSim, voice, gesture) are
+        deliberately isolated from one another: a CoppeliaSim connection
+        failure must not prevent Whisper/MediaPipe from loading, and a
+        voice-init failure (e.g. no microphone) must not prevent gesture
+        from starting, and vice versa - matching the architecture's
+        "perception must be testable without robot motion" principle and
+        "voice and gesture channels remain independent". Each subsystem
+        that fails to start is logged clearly and left as `None`/
+        disconnected rather than aborting the other two.
+        """
         logger.info("Connecting to CoppeliaSim...")
-        self.client = CoppeliaClient(
-            host=self.config.coppelia.host,
-            port=self.config.coppelia.port,
-            robot_object=self.config.coppelia.robot_object,
-        )
+        try:
+            self.client = CoppeliaClient(
+                host=self.config.coppelia.host,
+                port=self.config.coppelia.port,
+                robot_object=self.config.coppelia.robot_object,
+                retry_attempts=self.config.coppelia.connect_retry_attempts,
+                retry_delay_s=self.config.coppelia.connect_retry_delay_s,
+            )
+        except Exception:
+            # CoppeliaClient.connect() itself doesn't raise on connection
+            # failure (see its docstring) - this only catches a genuinely
+            # unexpected construction error, so the client still exists in
+            # a disconnected state and voice/gesture can proceed.
+            logger.exception("Unexpected error constructing CoppeliaClient - continuing without it")
+            self.client = None
         self.controller = RobotController(self.client, self.safety, self.config.robot)
 
-        if self.config.intent.qwen.enabled:
+        try:
+            # Always constructed (it does nothing until `.enabled` is true -
+            # see QwenClient.enabled) so the Configuration panel can flip
+            # `intent.qwen.enabled` on live, later in the session, without
+            # needing the voice pipeline restarted.
             self.qwen_client = QwenClient(self.config.intent.qwen)
-            if self.qwen_client.health_check():
-                logger.info("Ollama/Qwen fallback available (model=%s)", self.config.intent.qwen.model)
+            if self.config.intent.qwen.enabled:
+                if self.qwen_client.health_check():
+                    logger.info("Ollama/Qwen fallback available (model=%s)", self.config.intent.qwen.model)
+                else:
+                    logger.warning("Ollama/Qwen enabled but not reachable - fallback tier will be inactive")
             else:
-                logger.warning("Ollama/Qwen enabled but not reachable - fallback tier will be inactive")
-        else:
-            logger.info("Qwen intent fallback disabled by configuration")
+                logger.info("Qwen intent fallback disabled by configuration")
+        except Exception:
+            logger.exception("Failed to initialize Qwen client - fallback tier disabled")
+            self.qwen_client = None
 
         if self.config.voice.enabled:
-            logger.info("Loading Whisper model '%s'...", self.config.speech.whisper.model)
-            speech_cfg = self.config.speech
-            audio = AudioCapture(
-                sample_rate=self.config.microphone.sample_rate,
-                device_index=self.config.microphone.device_index,
-            )
-            vad = VoiceActivityDetector(
-                sample_rate=self.config.microphone.sample_rate,
-                frame_ms=speech_cfg.vad.frame_ms,
-                silence_timeout_s=speech_cfg.vad.silence_timeout_s,
-                max_recording_s=speech_cfg.vad.max_recording_s,
-                aggressiveness=speech_cfg.vad.aggressiveness,
-                backend=speech_cfg.vad.backend,
-            )
-            pinned_language = None if speech_cfg.languages.mode == "auto" else speech_cfg.languages.mode
-            transcriber = WhisperTranscriber(
-                model_size=speech_cfg.whisper.model,
-                device=speech_cfg.whisper.device,
-                compute_type=speech_cfg.whisper.compute_type,
-                pinned_language=pinned_language,
-            )
-            intent_engine = IntentEngine(
-                language=speech_cfg.languages.default_language,
-                enabled_languages=speech_cfg.languages.enabled,
-                confidence_threshold=speech_cfg.confidence_threshold,
-                qwen_client=self.qwen_client,
-            )
-            self.voice = VoicePipeline(audio, vad, transcriber, intent_engine)
-            self.voice.start()
+            try:
+                logger.info("Loading Whisper model '%s'...", self.config.speech.whisper.model)
+                speech_cfg = self.config.speech
+                audio = AudioCapture(
+                    sample_rate=self.config.microphone.sample_rate,
+                    device_index=self.config.microphone.device_index,
+                )
+                vad = VoiceActivityDetector(
+                    sample_rate=self.config.microphone.sample_rate,
+                    frame_ms=speech_cfg.vad.frame_ms,
+                    silence_timeout_s=speech_cfg.vad.silence_timeout_s,
+                    max_recording_s=speech_cfg.vad.max_recording_s,
+                    aggressiveness=speech_cfg.vad.aggressiveness,
+                    backend=speech_cfg.vad.backend,
+                )
+                pinned_language = None if speech_cfg.languages.mode == "auto" else speech_cfg.languages.mode
+                transcriber = WhisperTranscriber(
+                    model_size=speech_cfg.whisper.model,
+                    device=speech_cfg.whisper.device,
+                    compute_type=speech_cfg.whisper.compute_type,
+                    pinned_language=pinned_language,
+                )
+                intent_engine = IntentEngine(
+                    language=speech_cfg.languages.default_language,
+                    enabled_languages=speech_cfg.languages.enabled,
+                    confidence_threshold=speech_cfg.confidence_threshold,
+                    qwen_client=self.qwen_client,
+                )
+                self.voice = VoicePipeline(audio, vad, transcriber, intent_engine)
+                self.voice.start()
+            except Exception:
+                logger.exception("Failed to start the voice pipeline - voice recognition disabled for this run")
+                self.voice = None
         else:
             logger.info("Voice pipeline disabled by configuration")
 
         if self.config.gesture.enabled:
-            logger.info("Loading gesture pipeline...")
-            self.gesture = GesturePipeline(self.config.camera, self.config.gesture)
-            self.gesture.start()
+            try:
+                logger.info("Loading gesture pipeline...")
+                self.gesture = GesturePipeline(self.config.camera, self.config.gesture)
+                self.gesture.start()
+            except Exception:
+                logger.exception("Failed to start the gesture pipeline - gesture recognition disabled for this run")
+                self.gesture = None
         else:
             logger.info("Gesture pipeline disabled by configuration")
 
         logger.info(
-            "Startup complete. voice=%s gesture=%s coppelia=connected",
+            "Startup complete. voice=%s gesture=%s coppelia=%s",
             "enabled" if self.voice else "disabled",
             "enabled" if self.gesture else "disabled",
+            "connected" if (self.client and self.client.is_connected()) else "disconnected",
         )
 
     def stop(self) -> None:

@@ -55,7 +55,13 @@ def test_low_confidence_voice_event_is_rejected():
 
 
 def test_duplicate_command_within_cooldown_is_suppressed():
-    engine = FusionEngine(FusionConfig(mode="voice_only", duplicate_command_cooldown_ms=1000))
+    # stale_event_timeout_ms is raised well above the 2s offset used below so
+    # this test isolates duplicate-cooldown behavior from stale-event
+    # filtering (the two would otherwise sit on the same boundary and make
+    # the third assertion flaky).
+    engine = FusionEngine(
+        FusionConfig(mode="voice_only", duplicate_command_cooldown_ms=1000, stale_event_timeout_ms=10000)
+    )
     now = time.time()
     first = engine.resolve(voice_event=_voice("go"), gesture_event=None, now=now)
     assert first is not None
