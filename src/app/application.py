@@ -297,11 +297,33 @@ class Application:
     # ================= GUI =================
 
     def run_gui(self) -> int:
+        from PySide6.QtGui import QColor, QPalette
         from PySide6.QtWidgets import QApplication
 
         from src.ui.main_window import MainWindow
 
         qt_app = QApplication.instance() or QApplication([])
+
+        # Force a light theme regardless of the OS/system color scheme.
+        qt_app.setStyle("Fusion")
+        light_palette = QPalette()
+        light_palette.setColor(QPalette.Window, QColor("#f5f5f5"))
+        light_palette.setColor(QPalette.WindowText, QColor("#202020"))
+        light_palette.setColor(QPalette.Base, QColor("#ffffff"))
+        light_palette.setColor(QPalette.AlternateBase, QColor("#f0f0f0"))
+        light_palette.setColor(QPalette.ToolTipBase, QColor("#ffffff"))
+        light_palette.setColor(QPalette.ToolTipText, QColor("#202020"))
+        light_palette.setColor(QPalette.Text, QColor("#202020"))
+        light_palette.setColor(QPalette.Button, QColor("#f0f0f0"))
+        light_palette.setColor(QPalette.ButtonText, QColor("#202020"))
+        light_palette.setColor(QPalette.BrightText, QColor("#ff0000"))
+        light_palette.setColor(QPalette.Highlight, QColor("#1971c2"))
+        light_palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+        light_palette.setColor(QPalette.Disabled, QPalette.Text, QColor("#a0a0a0"))
+        light_palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#a0a0a0"))
+        light_palette.setColor(QPalette.Disabled, QPalette.WindowText, QColor("#a0a0a0"))
+        qt_app.setPalette(light_palette)
+
         window = MainWindow(self)
         window.show()
         return qt_app.exec()
